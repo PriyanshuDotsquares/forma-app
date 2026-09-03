@@ -5,11 +5,11 @@ import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../../../core/design_system/design_system.dart';
 import '../../../core/router/app_router.dart';
+import '../../camera_coach/data/mediapipe/pose_types.dart';
 import '../../camera_coach/data/pose_service.dart';
 import 'workout_providers.dart';
 
@@ -64,7 +64,7 @@ _PrecheckStatus _evaluate(Pose? pose, Size imageSize) {
     sideView = (shoulderWidth / (maxY - minY)) < 0.22;
   }
 
-  // "Lighting looks good": ML Kit's per-landmark confidence tends to drop
+  // "Lighting looks good": the pose detector's per-landmark confidence tends to drop
   // in poor lighting/high noise even when the subject is fully in frame —
   // a proxy for image quality, not a true lux measurement.
   final avgLikelihood = confident.map((l) => l.likelihood).reduce((a, b) => a + b) / confident.length;
@@ -116,18 +116,18 @@ class _CameraPrecheckScreenState extends ConsumerState<CameraPrecheckScreen> {
     if (!mounted) return;
 
     if (result == PoseServiceInitResult.ready) {
-      final previewSize = _poseService.controller.value.previewSize;
-      final sensorOrientation = _poseService.controller.description.sensorOrientation;
       setState(() {
         _initResult = result;
         _initializing = false;
-        _imageSize = previewSize == null
-            ? null
-            : (sensorOrientation % 180 == 90 ? Size(previewSize.height, previewSize.width) : previewSize);
       });
       _poseService.startStream((pose) {
         if (!mounted) return;
-        setState(() => _latestPose = pose);
+        setState(() {
+          _latestPose = pose;
+          // Not `controller.value.previewSize` — see `PoseCoachService.
+          // lastFrameSize`'s doc comment for why that's unreliable on Android.
+          _imageSize = _poseService.lastFrameSize ?? _imageSize;
+        });
       });
     } else {
       setState(() {

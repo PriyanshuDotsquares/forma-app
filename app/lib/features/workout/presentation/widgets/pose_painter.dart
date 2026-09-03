@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
+import '../../../camera_coach/data/mediapipe/pose_types.dart';
 
 import '../../../../core/design_system/design_system.dart';
 
@@ -36,8 +36,8 @@ const _skeleton = <_Bone>[
 /// every confident landmark.
 ///
 /// This is a coaching overlay, not a pixel-exact reprojection: landmark
-/// x/y (in the "upright" coordinate space ML Kit reports for the
-/// `InputImageRotation` it was given) are scaled independently per axis to
+/// x/y (in the "upright" coordinate space the pose detector reports for the
+/// rotation it was given) are scaled independently per axis to
 /// fill [size], which assumes the preview beneath it fills its bounds the
 /// same way. Good enough for "does the line roughly track the limb", not
 /// meant to survive scrutiny at the pixel level.

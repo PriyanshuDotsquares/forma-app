@@ -2,9 +2,8 @@ import 'dart:async';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
-
 import '../../../../core/design_system/design_system.dart';
+import '../../../camera_coach/data/mediapipe/pose_types.dart';
 import '../../../auth/domain/user.dart';
 import '../../../camera_coach/data/pose_service.dart';
 import '../../../camera_coach/data/voice_coach.dart';
@@ -106,18 +105,9 @@ class _LiveTrackingOverlayState extends State<LiveTrackingOverlay> {
     if (!mounted) return;
 
     if (result == PoseServiceInitResult.ready) {
-      final previewSize = _poseService.controller.value.previewSize;
-      final sensorOrientation = _poseService.controller.description.sensorOrientation;
-      // `previewSize` is reported in the sensor's native (landscape)
-      // orientation; swap it for a portrait/upright device so it matches
-      // the coordinate space pose landmarks are reported in.
-      final imageSize = previewSize == null
-          ? null
-          : (sensorOrientation % 180 == 90 ? Size(previewSize.height, previewSize.width) : previewSize);
       setState(() {
         _initResult = result;
         _initializing = false;
-        _imageSize = imageSize;
         _mirror = _poseService.controller.description.lensDirection == CameraLensDirection.front;
       });
       _poseService.startStream(_handlePose);
@@ -140,6 +130,9 @@ class _LiveTrackingOverlayState extends State<LiveTrackingOverlay> {
     setState(() {
       _latestPose = pose;
       _snapshot = snapshot;
+      // Not `controller.value.previewSize` — see `PoseCoachService.
+      // lastFrameSize`'s doc comment for why that's unreliable on Android.
+      _imageSize = _poseService.lastFrameSize ?? _imageSize;
     });
     if (snapshot.cues.isNotEmpty) {
       unawaited(_voiceCoach.speak(snapshot.cues.first));

@@ -1,23 +1,24 @@
+# Render Blueprint for the FORMA API.
+# https://render.com/docs/blueprint-spec
+#
+# This tracks the deployed service's shape (build, start command, env var
+# names) in the repo. Secret values are NOT stored here — `sync: false`
+# vars must still be set once in the Render dashboard.
 services:
   - type: web
     name: forma-api
     runtime: docker
-    dockerfilePath: ./backend/Dockerfile
-    dockerContext: ./backend
-    plan: free
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter
     healthCheckPath: /health
     envVars:
       - key: DATABASE_URL
-        fromDatabase:
-          name: forma-db
-          property: connectionString
+        sync: false
       - key: SECRET_KEY
-        generateValue: true
+        sync: false
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "1440"
       - key: CORS_ORIGINS
         value: '["*"]'
-
-databases:
-  - name: forma-db
-    plan: free
-    databaseName: forma
-    user: forma

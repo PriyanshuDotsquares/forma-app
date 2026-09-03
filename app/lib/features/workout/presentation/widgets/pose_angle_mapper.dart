@@ -1,13 +1,12 @@
 import 'dart:math' as math;
 
-import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
-
+import '../../../camera_coach/data/mediapipe/pose_types.dart';
 import '../../../camera_coach/domain/form_heuristics.dart';
 import '../../../camera_coach/domain/rep_counter.dart';
 
-/// Bridges ML Kit's [Pose] to the camera-coach engine's camera-agnostic
+/// Bridges MediaPipe's [Pose] to the camera-coach engine's camera-agnostic
 /// [JointAngles]. This is the one file in the workout feature that imports
-/// both ML Kit pose types and the pure `camera_coach/domain` types —
+/// both the pose types and the pure `camera_coach/domain` types —
 /// everything downstream of [jointAnglesFromPose] (RepCounter,
 /// FormHeuristics) only ever sees [JointAngles], which is what keeps those
 /// two testable without a camera.
@@ -16,7 +15,7 @@ const double _minLikelihood = 0.5;
 bool _confident(PoseLandmark? landmark) => landmark != null && landmark.likelihood >= _minLikelihood;
 
 /// The interior angle at [b] of the triangle a-b-c, in degrees, using 2D
-/// image-plane coordinates (ML Kit's x/y are pixel coordinates in the
+/// image-plane coordinates (the pose detector's x/y are pixel coordinates in the
 /// input image; z is a rough relative depth we don't attempt to use here —
 /// 2D is a reasonable approximation for a coaching heuristic viewed from a
 /// roughly side-on or front-on camera).

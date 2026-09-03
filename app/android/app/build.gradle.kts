@@ -42,3 +42,10 @@ android {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // MediaPipe Tasks Vision Pose Landmarker — no Flutter plugin wraps
+    // this, so it's linked directly and driven from Kotlin via a
+    // hand-written MethodChannel (see MediaPipePoseChannel.kt).
+    implementation("com.google.mediapipe:tasks-vision:1.0.0")
+}

@@ -4,8 +4,10 @@ import 'dart:typed_data';
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
-import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 import 'package:permission_handler/permission_handler.dart';
+
+import 'mediapipe/mediapipe_pose_detector.dart';
+import 'mediapipe/pose_types.dart';
 
 /// Outcome of [PoseCoachService.initialize].
 enum PoseServiceInitResult {
@@ -15,37 +17,24 @@ enum PoseServiceInitResult {
   /// The user denied (or has permanently denied) camera permission.
   permissionDenied,
 
-  /// Permission was granted but no usable camera was found, or the
-  /// controller failed to initialize (e.g. running on a simulator/emulator
-  /// with no working camera feed). Callers should fall back to a
-  /// no-camera state rather than crash.
+  /// Permission was granted but no usable camera was found, the pose
+  /// detector failed to load its model, or the controller failed to
+  /// initialize (e.g. running on a simulator/emulator with no working
+  /// camera feed). Callers should fall back to a no-camera state rather
+  /// than crash.
   noCameraAvailable,
 }
 
-/// Wraps the `camera` plugin and ML Kit's on-device [PoseDetector] into one
-/// engine object: own a [PoseCoachService], call [initialize], then
-/// [startStream] to get a pose on every camera frame. Pure UI is
-/// deliberately kept out of this file — screens own a `CameraPreview` /
-/// `CustomPainter` themselves and just read [controller] and the pose
-/// callback.
+/// Wraps the `camera` plugin and a native MediaPipe Tasks Vision Pose
+/// Landmarker into one engine object: own a [PoseCoachService], call
+/// [initialize], then [startStream] to get a pose on every camera frame.
+/// Pure UI is deliberately kept out of this file — screens own a
+/// `CameraPreview` / `CustomPainter` themselves and just read [controller]
+/// and the pose callback.
 class PoseCoachService {
-  PoseCoachService({PoseDetector? detector})
-    : _detector =
-          detector ??
-          PoseDetector(
-            options: PoseDetectorOptions(
-              // `base` (the package default) is tuned for close-up, fast
-              // detection; `accurate` costs some latency but tracks a
-              // full body much more reliably at the couple-of-metres
-              // distance a propped-up coaching phone is shot from — this
-              // is exactly the scenario Google's own ML Kit guidance
-              // recommends `accurate` for.
-              model: PoseDetectionModel.accurate,
-              mode: PoseDetectionMode.stream,
-            ),
-          );
+  PoseCoachService() : _detector = MediaPipePoseDetector();
 
-  final PoseDetector _detector;
+  final MediaPipePoseDetector _detector;
 
   CameraController? _controller;
   CameraDescription? _cameraDescription;
@@ -53,6 +42,7 @@ class PoseCoachService {
   bool _isStreaming = false;
   bool _isBusy = false;
   void Function(Pose? pose)? _onPose;
+  Size? _lastFrameSize;
 
   /// The active camera controller. Only valid after [initialize] returns
   /// [PoseServiceInitResult.ready].
@@ -66,7 +56,23 @@ class PoseCoachService {
 
   bool get isInitialized => _controller?.value.isInitialized ?? false;
 
-  /// Requests camera permission and opens a [CameraController].
+  /// The most recently processed frame's *display* (upright, rotation-
+  /// applied) size — i.e. exactly the width/height the native pose
+  /// detector actually scaled its landmarks against (see
+  /// `MediaPipePoseChannel`'s rotation handling on both platforms). `null`
+  /// until the first frame has been processed.
+  ///
+  /// Callers scaling landmark positions for display (`PoseSkeletonPainter`)
+  /// must use this, not `controller.value.previewSize` — CameraX (Android)
+  /// negotiates the preview surface and the image-analysis stream as
+  /// separate use cases, which frequently end up at different actual
+  /// resolutions even when configured with the same target size, so
+  /// `previewSize` is not a reliable stand-in for the frame size pose
+  /// landmarks are actually reported in.
+  Size? get lastFrameSize => _lastFrameSize;
+
+  /// Requests camera permission, loads the native pose-detector model, and
+  /// opens a [CameraController].
   ///
   /// Camera choice: for coaching a lift, the **rear** camera is the more
   /// useful default — the phone gets propped up across the room (on a
@@ -80,6 +86,12 @@ class PoseCoachService {
     final status = await Permission.camera.request();
     if (!status.isGranted) {
       return PoseServiceInitResult.permissionDenied;
+    }
+
+    final detectorReady = await _detector.initialize();
+    if (!detectorReady) {
+      debugPrint('PoseCoachService: MediaPipePoseDetector.initialize() failed');
+      return PoseServiceInitResult.noCameraAvailable;
     }
 
     try {
@@ -128,10 +140,10 @@ class PoseCoachService {
       camera,
       ResolutionPreset.medium,
       enableAudio: false,
-      // ML Kit's InputImage.fromBytes only understands nv21 on Android and
-      // bgra8888 on iOS (see InputImageMetadata's doc comment in
-      // google_mlkit_commons) — requesting anything else here would make
-      // every frame fail to decode on-device.
+      // The native pose landmarker only understands a single-plane buffer
+      // per frame: nv21 on Android, bgra8888 on iOS (see `_frameFor`) —
+      // requesting anything else here would make every frame fail to
+      // decode on-device.
       imageFormatGroup: Platform.isAndroid ? ImageFormatGroup.nv21 : ImageFormatGroup.bgra8888,
     );
 
@@ -169,19 +181,25 @@ class PoseCoachService {
   }
 
   Future<void> _handleImage(CameraImage image) async {
-    // ML Kit's processImage is async and frames arrive faster than it can
-    // keep up on most devices — drop any frame that arrives while we're
-    // still processing the previous one instead of queuing them up.
+    // Frames arrive faster than the native detector can keep up on most
+    // devices — drop any frame that arrives while we're still processing
+    // the previous one instead of queuing them up.
     if (_isBusy) return;
     _isBusy = true;
     try {
-      final inputImage = _toInputImage(image);
-      if (inputImage == null) {
+      final frame = _frameFor(image);
+      if (frame == null) {
         _onPose?.call(null);
         return;
       }
-      final poses = await _detector.processImage(inputImage);
-      _onPose?.call(poses.isNotEmpty ? poses.first : null);
+      final pose = await _detector.detect(
+        bytes: frame.bytes,
+        width: frame.width,
+        height: frame.height,
+        bytesPerRow: frame.bytesPerRow,
+        rotationDegrees: frame.rotationDegrees,
+      );
+      _onPose?.call(pose);
     } catch (e) {
       // A single bad frame (e.g. mid-rotation, or the platform channel
       // hiccups) should never crash the session — just report "no pose"
@@ -195,8 +213,8 @@ class PoseCoachService {
 
   /// Maps a device orientation to the clockwise rotation (in degrees) of
   /// the display relative to the sensor's natural orientation — the same
-  /// table Google's own ML Kit + camera example apps use to build
-  /// [InputImageRotation] from a live camera stream.
+  /// table Google's own ML Kit + camera example apps use to build a
+  /// rotation value from a live camera stream.
   static const Map<DeviceOrientation, int> _orientationDegrees = {
     DeviceOrientation.portraitUp: 0,
     DeviceOrientation.landscapeLeft: 90,
@@ -204,56 +222,76 @@ class PoseCoachService {
     DeviceOrientation.landscapeRight: 270,
   };
 
-  InputImage? _toInputImage(CameraImage image) {
+  _CameraFrame? _frameFor(CameraImage image) {
     final camera = _cameraDescription;
     final controller = _controller;
     if (camera == null || controller == null) return null;
 
-    final rotation = _rotationFor(camera, controller);
-    if (rotation == null) return null;
+    final rotationDegrees = _rotationFor(camera, controller);
+    if (rotationDegrees == null) {
+      debugPrint('PoseCoachService: dropping frame — could not resolve device orientation');
+      return null;
+    }
 
-    final format = InputImageFormatValue.fromRawValue(image.format.raw as int);
-    // The camera controller was opened with an explicit imageFormatGroup
-    // above, so on a correctly-behaving platform this should always match;
-    // bail out (report "no pose" for this frame) rather than hand ML Kit a
-    // buffer it doesn't know how to interpret.
-    final expected = Platform.isAndroid ? InputImageFormat.nv21 : InputImageFormat.bgra8888;
-    if (format == null || format != expected) return null;
+    // Recorded from the raw buffer's own dimensions (not `previewSize` —
+    // see `lastFrameSize`'s doc comment) regardless of whether this frame
+    // passes the checks below, since width/height/rotation are already
+    // known and this is the authoritative size the native detector will
+    // scale landmarks against for *this* frame.
+    _lastFrameSize = (rotationDegrees == 90 || rotationDegrees == 270)
+        ? Size(image.height.toDouble(), image.width.toDouble())
+        : Size(image.width.toDouble(), image.height.toDouble());
+
+    // Deliberately checking the *raw* platform format code, not
+    // `image.format.group`: `camera_platform_interface`'s own group
+    // derivation (`_imageFormatGroupFromPlatformData`) has no case for
+    // Android's NV21 raw code (17) — exactly the format requested below —
+    // and silently falls back to `ImageFormatGroup.unknown` for it, which
+    // would make this check reject every single frame on Android. The raw
+    // code is stable platform API (`android.graphics.ImageFormat.NV21` /
+    // `kCVPixelFormatType_32BGRA`), so check that instead of trusting `.group`.
+    const androidNv21Raw = 17;
+    const iosBgra8888Raw = 1111970369;
+    final expectedRaw = Platform.isAndroid ? androidNv21Raw : iosBgra8888Raw;
+    if (image.format.raw != expectedRaw) {
+      debugPrint('PoseCoachService: dropping frame — unexpected format raw=${image.format.raw} (expected $expectedRaw)');
+      return null;
+    }
 
     // Both nv21 (Android) and bgra8888 (iOS) frames from `camera` arrive as
-    // a single plane; anything else isn't a shape ML Kit's fromBytes API
+    // a single plane; anything else isn't a shape the native detector
     // supports.
-    if (image.planes.length != 1) return null;
+    if (image.planes.length != 1) {
+      debugPrint('PoseCoachService: dropping frame — expected 1 plane, got ${image.planes.length}');
+      return null;
+    }
     final plane = image.planes.first;
 
-    return InputImage.fromBytes(
+    return _CameraFrame(
       bytes: plane.bytes,
-      metadata: InputImageMetadata(
-        size: Size(image.width.toDouble(), image.height.toDouble()),
-        rotation: rotation,
-        format: format,
-        bytesPerRow: plane.bytesPerRow,
-      ),
+      width: image.width,
+      height: image.height,
+      bytesPerRow: plane.bytesPerRow,
+      rotationDegrees: rotationDegrees,
     );
   }
 
-  InputImageRotation? _rotationFor(CameraDescription camera, CameraController controller) {
-    // iOS: the sensor orientation alone is the rotation ML Kit wants.
+  /// iOS: the sensor orientation alone is the rotation the detector wants.
+  /// Android: combine the sensor orientation with the current device
+  /// orientation, and flip the sign for a front-facing sensor (its image
+  /// is mirrored relative to a back-facing one).
+  int? _rotationFor(CameraDescription camera, CameraController controller) {
     if (Platform.isIOS) {
-      return InputImageRotationValue.fromRawValue(camera.sensorOrientation);
+      return camera.sensorOrientation;
     }
-    // Android: combine the sensor orientation with the current device
-    // orientation, and flip the sign for a front-facing sensor (its image
-    // is mirrored relative to a back-facing one).
     if (Platform.isAndroid) {
       final deviceDegrees = _orientationDegrees[controller.value.deviceOrientation];
       if (deviceDegrees == null) return null;
-      final rotationCompensation = camera.lensDirection == CameraLensDirection.front
+      return camera.lensDirection == CameraLensDirection.front
           ? (camera.sensorOrientation + deviceDegrees) % 360
           : (camera.sensorOrientation - deviceDegrees + 360) % 360;
-      return InputImageRotationValue.fromRawValue(rotationCompensation);
     }
-    return InputImageRotationValue.fromRawValue(camera.sensorOrientation);
+    return camera.sensorOrientation;
   }
 
   Future<void> dispose() async {
@@ -265,6 +303,18 @@ class PoseCoachService {
     }
     await _detector.close();
   }
+}
+
+/// One camera frame's worth of data handed to [MediaPipePoseDetector.detect]
+/// — the boundary between `camera`'s [CameraImage] and the platform channel.
+class _CameraFrame {
+  const _CameraFrame({required this.bytes, required this.width, required this.height, required this.bytesPerRow, required this.rotationDegrees});
+
+  final Uint8List bytes;
+  final int width;
+  final int height;
+  final int bytesPerRow;
+  final int rotationDegrees;
 }
 
 /// Best-effort check for whether a [pose]'s landmarks look usable — many
@@ -280,7 +330,7 @@ bool poseLooksUsable(Pose? pose, {int minLandmarks = 20, double minLikelihood = 
 
 /// Bytes helper kept here (rather than inline) purely so it's easy to spot
 /// in a diff if a future platform ever hands back a multi-plane nv21/bgra
-/// buffer that [PoseCoachService._toInputImage] would otherwise reject.
+/// buffer that [PoseCoachService._frameFor] would otherwise reject.
 Uint8List concatenatePlanes(Iterable<Uint8List> planes) {
   final builder = BytesBuilder();
   for (final bytes in planes) {

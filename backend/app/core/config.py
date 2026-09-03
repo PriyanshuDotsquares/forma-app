@@ -41,9 +41,9 @@ class Settings(BaseSettings):
 
     # Used only by `app.db.ai_seed` (a manually-run script, not called at
     # request time or during `alembic upgrade`) to generate new exercises/
-    # achievements/challenges via the Claude API. Unset in most
+    # achievements/challenges via the Groq API. Unset in most
     # environments — the app runs fine without it.
-    anthropic_api_key: str | None = None
+    groq_api_key: str | None = None
 
 
 @lru_cache

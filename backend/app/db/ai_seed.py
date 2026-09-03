@@ -1,4 +1,4 @@
-"""Generates new exercises/achievements/challenges via the Claude API and
+"""Generates new exercises/achievements/challenges via the Groq API and
 adds them to the database — additively, never overwriting or deleting
 existing rows. The original curated content in `seed_data.py` was already
 baked into the initial Alembic migrations and is live in every deployed
@@ -10,8 +10,8 @@ Run manually:
 
     python -m app.db.ai_seed [--exercises N] [--achievements N] [--challenges N]
 
-Requires `ANTHROPIC_API_KEY` (see `.env.example`). Deliberately NOT wired
-into Alembic migrations or app startup: a migration is supposed to be a
+Requires `GROQ_API_KEY` (see `.env.example`). Deliberately NOT wired into
+Alembic migrations or app startup: a migration is supposed to be a
 deterministic, offline-replayable step — a live network call to an LLM
 inside `upgrade()` would make `alembic upgrade head` non-reproducible
 (different environments could get different generated content) and would
@@ -19,6 +19,14 @@ make every fresh `alembic upgrade head` (a new dev machine, CI, disaster
 recovery) fail or hang if the API key is missing or the API is briefly
 down. Same reasoning against app-startup seeding — it would add a paid
 external dependency to every boot. This is an explicit, opt-in step.
+
+Uses Groq's OpenAI-compatible `response_format: {"type": "json_schema", ...,
+"strict": True}` structured-output mode, only supported by a handful of
+Groq-hosted models (GPT-OSS 20B/120B, Qwen3(.6/.8) 27B as of writing) — see
+`MODEL` below. `strict_schema()` post-processes Pydantic's JSON Schema
+output because strict mode requires every property to be listed in
+`required` and every object to set `additionalProperties: false`, which
+Pydantic doesn't do by default for fields that have a Python-side default.
 """
 
 import argparse
@@ -26,7 +34,7 @@ import asyncio
 import json
 from typing import Any, Literal
 
-import anthropic
+from groq import AsyncGroq
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,7 +46,7 @@ from app.models.achievement import Achievement
 from app.models.challenge import Challenge
 from app.models.exercise import Exercise
 
-MODEL = "claude-opus-5"
+MODEL = "openai/gpt-oss-120b"
 
 # --- Schemas -------------------------------------------------------------
 # Every enum below mirrors a vocabulary another part of the app reads by
@@ -152,6 +160,36 @@ class ChallengeBatch(BaseModel):
     challenges: list[ChallengeGen]
 
 
+def strict_schema(model: type[BaseModel]) -> dict[str, Any]:
+    """Pydantic's `model_json_schema()` only marks a field `required` when
+    it has no Python-side default — Groq's strict mode requires *every*
+    property to be listed in `required` (a nullable/optional field is
+    expressed by its type accepting `null`, not by omitting it from
+    `required`) and every object to set `additionalProperties: false`.
+    Walks the schema (including `$defs`, array `items`, and `anyOf`/
+    `allOf`/`oneOf` branches) and forces both, recursively.
+    """
+    schema = model.model_json_schema()
+
+    def _tighten(node: Any) -> None:
+        if not isinstance(node, dict):
+            return
+        if node.get("type") == "object" and "properties" in node:
+            node["required"] = list(node["properties"].keys())
+            node["additionalProperties"] = False
+        for key in ("properties", "$defs"):
+            for v in node.get(key, {}).values():
+                _tighten(v)
+        if isinstance(node.get("items"), dict):
+            _tighten(node["items"])
+        for key in ("anyOf", "allOf", "oneOf"):
+            for v in node.get(key, []):
+                _tighten(v)
+
+    _tighten(schema)
+    return schema
+
+
 # --- Prompts ---------------------------------------------------------------
 
 _EXERCISE_PROMPT = """Generate {count} new strength-training exercises for FORMA, a strength-coaching app, as a JSON object matching the schema.
@@ -163,7 +201,7 @@ Rules:
 - `execution_steps` are short imperative instructions, in performance order.
 - `pro_cues` are short, punchy coaching cues.
 - Each entry in `mistakes` has a `title` (short, e.g. "Elbows flared"), `why` (one sentence on the consequence), and `fix` (one short imperative sentence).
-- `supports_camera` is true only for exercises where a side-view or front-view camera could meaningfully track joint angles for rep counting (mainly free-weight compound lifts); set `camera_view` accordingly, or leave it null when `supports_camera` is false.
+- `supports_camera` is true only for exercises where a side-view or front-view camera could meaningfully track joint angles for rep counting (mainly free-weight compound lifts); set `camera_view` accordingly, or null when `supports_camera` is false.
 - Do NOT reuse any of these slugs, which already exist: {existing_keys}
 - Cover a good spread across muscle groups and equipment types — don't cluster on one muscle or one equipment type.
 
@@ -205,10 +243,20 @@ def _examples_json(items: list[dict[str, Any]], n: int, keys: list[str]) -> str:
     return json.dumps(sample, indent=2, default=str)
 
 
+async def _generate_batch(client: AsyncGroq, batch_model: type[BaseModel], schema_name: str, prompt: str) -> BaseModel:
+    response = await client.chat.completions.create(
+        model=MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        response_format={"type": "json_schema", "json_schema": {"name": schema_name, "strict": True, "schema": strict_schema(batch_model)}},
+    )
+    content = response.choices[0].message.content
+    return batch_model.model_validate_json(content)
+
+
 # --- Generation --------------------------------------------------------------
 
 
-async def _generate_exercises(client: anthropic.AsyncAnthropic, count: int, existing_slugs: set[str]) -> list[ExerciseGen]:
+async def _generate_exercises(client: AsyncGroq, count: int, existing_slugs: set[str]) -> list[ExerciseGen]:
     examples = _examples_json(
         EXERCISES,
         3,
@@ -227,34 +275,31 @@ async def _generate_exercises(client: anthropic.AsyncAnthropic, count: int, exis
         ],
     )
     prompt = _EXERCISE_PROMPT.format(count=count, existing_keys=sorted(existing_slugs), examples=examples)
-    response = await client.messages.parse(
-        model=MODEL, max_tokens=16000, messages=[{"role": "user", "content": prompt}], output_format=ExerciseBatch
-    )
-    return response.parsed_output.exercises
+    batch = await _generate_batch(client, ExerciseBatch, "exercise_batch", prompt)
+    assert isinstance(batch, ExerciseBatch)
+    return batch.exercises
 
 
-async def _generate_achievements(client: anthropic.AsyncAnthropic, count: int, existing_keys: set[str]) -> list[AchievementGen]:
+async def _generate_achievements(client: AsyncGroq, count: int, existing_keys: set[str]) -> list[AchievementGen]:
     examples = _examples_json(ACHIEVEMENTS, 6, ["key", "category", "title", "description", "icon", "criteria", "is_secret"])
     prompt = _ACHIEVEMENT_PROMPT.format(count=count, existing_keys=sorted(existing_keys), examples=examples)
-    response = await client.messages.parse(
-        model=MODEL, max_tokens=8000, messages=[{"role": "user", "content": prompt}], output_format=AchievementBatch
-    )
-    return response.parsed_output.achievements
+    batch = await _generate_batch(client, AchievementBatch, "achievement_batch", prompt)
+    assert isinstance(batch, AchievementBatch)
+    return batch.achievements
 
 
-async def _generate_challenges(client: anthropic.AsyncAnthropic, count: int, existing_keys: set[str]) -> list[ChallengeGen]:
+async def _generate_challenges(client: AsyncGroq, count: int, existing_keys: set[str]) -> list[ChallengeGen]:
     examples = _examples_json(CHALLENGES, 6, ["key", "title", "description", "metric", "period", "target_value", "icon", "is_group"])
     prompt = _CHALLENGE_PROMPT.format(count=count, existing_keys=sorted(existing_keys), examples=examples)
-    response = await client.messages.parse(
-        model=MODEL, max_tokens=4000, messages=[{"role": "user", "content": prompt}], output_format=ChallengeBatch
-    )
-    return response.parsed_output.challenges
+    batch = await _generate_batch(client, ChallengeBatch, "challenge_batch", prompt)
+    assert isinstance(batch, ChallengeBatch)
+    return batch.challenges
 
 
 # --- Seeding (additive upsert-by-natural-key) -------------------------------
 
 
-async def seed_exercises(session: AsyncSession, client: anthropic.AsyncAnthropic, count: int) -> int:
+async def seed_exercises(session: AsyncSession, client: AsyncGroq, count: int) -> int:
     existing = set((await session.scalars(select(Exercise.slug))).all())
     generated = await _generate_exercises(client, count, existing)
     seen = set(existing)
@@ -283,7 +328,7 @@ async def seed_exercises(session: AsyncSession, client: anthropic.AsyncAnthropic
     return added
 
 
-async def seed_achievements(session: AsyncSession, client: anthropic.AsyncAnthropic, count: int) -> int:
+async def seed_achievements(session: AsyncSession, client: AsyncGroq, count: int) -> int:
     existing = set((await session.scalars(select(Achievement.key))).all())
     generated = await _generate_achievements(client, count, existing)
     seen = set(existing)
@@ -308,7 +353,7 @@ async def seed_achievements(session: AsyncSession, client: anthropic.AsyncAnthro
     return added
 
 
-async def seed_challenges(session: AsyncSession, client: anthropic.AsyncAnthropic, count: int) -> int:
+async def seed_challenges(session: AsyncSession, client: AsyncGroq, count: int) -> int:
     existing = set((await session.scalars(select(Challenge.key))).all())
     generated = await _generate_challenges(client, count, existing)
     seen = set(existing)
@@ -336,17 +381,17 @@ async def seed_challenges(session: AsyncSession, client: anthropic.AsyncAnthropi
 
 
 async def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate and add AI-created exercises/achievements/challenges via the Claude API.")
+    parser = argparse.ArgumentParser(description="Generate and add AI-created exercises/achievements/challenges via the Groq API.")
     parser.add_argument("--exercises", type=int, default=40, help="How many new exercises to generate (default 40, 0 to skip).")
     parser.add_argument("--achievements", type=int, default=20, help="How many new achievements to generate (default 20, 0 to skip).")
     parser.add_argument("--challenges", type=int, default=6, help="How many new challenges to generate (default 6, 0 to skip).")
     args = parser.parse_args()
 
     settings = get_settings()
-    if not settings.anthropic_api_key:
-        raise SystemExit("ANTHROPIC_API_KEY is not set — add it to backend/.env before running this script.")
+    if not settings.groq_api_key:
+        raise SystemExit("GROQ_API_KEY is not set — add it to backend/.env before running this script.")
 
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    client = AsyncGroq(api_key=settings.groq_api_key)
 
     async with async_session_factory() as session:
         added_exercises = await seed_exercises(session, client, args.exercises) if args.exercises > 0 else 0

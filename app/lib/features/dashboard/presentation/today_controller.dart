@@ -1,7 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../programs/domain/program.dart';
-import '../../programs/presentation/programs_providers.dart';
+import '../../programs/presentation/active_program_controller.dart';
 import '../../progress/data/progress_providers.dart';
 import '../../progress/domain/progress_models.dart';
 import '../../workout/domain/workout_session.dart';
@@ -22,10 +22,19 @@ class TodayData {
 class TodayController extends AsyncNotifier<TodayData> {
   @override
   Future<TodayData> build() async {
-    final programsRepository = ref.watch(programsRepositoryProvider);
     final workoutRepository = ref.watch(workoutRepositoryProvider);
 
-    final program = await programsRepository.getActiveProgram();
+    // Derived from `activeProgramControllerProvider` — the Plan tab's
+    // documented "single source of truth for the user's active program" —
+    // instead of independently calling `getActiveProgram()`. This used to
+    // fetch its own copy, which meant a regenerate from the Plan tab (or
+    // onboarding) never reached this screen: both tabs stay alive in the
+    // app's persistent shell, so Today's independently-fetched `Program`
+    // just sat there stale until a pull-to-refresh or app restart, while
+    // the Plan tab correctly showed the newest program — watching the
+    // shared provider means any regenerate, from anywhere, is reflected
+    // here automatically too.
+    final program = await ref.watch(activeProgramControllerProvider.future);
     final sessions = await workoutRepository.listSessions(limit: 30);
 
     // Recovery is a nice-to-have on the rest-day card, not core to this
@@ -43,10 +52,9 @@ class TodayController extends AsyncNotifier<TodayData> {
   /// There's no active program, but onboarding is already complete — the
   /// first generation attempt must have failed, so retry it.
   Future<void> regenerateProgram() async {
-    final programsRepository = ref.read(programsRepositoryProvider);
     state = const AsyncLoading();
     state = await AsyncValue.guard(() async {
-      await programsRepository.generateProgram();
+      await ref.read(activeProgramControllerProvider.notifier).regenerate();
       return build();
     });
   }

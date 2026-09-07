@@ -20,13 +20,10 @@ recovery) fail or hang if the API key is missing or the API is briefly
 down. Same reasoning against app-startup seeding — it would add a paid
 external dependency to every boot. This is an explicit, opt-in step.
 
-Uses Groq's OpenAI-compatible `response_format: {"type": "json_schema", ...,
-"strict": True}` structured-output mode, only supported by a handful of
-Groq-hosted models (GPT-OSS 20B/120B, Qwen3(.6/.8) 27B as of writing) — see
-`MODEL` below. `strict_schema()` post-processes Pydantic's JSON Schema
-output because strict mode requires every property to be listed in
-`required` and every object to set `additionalProperties: false`, which
-Pydantic doesn't do by default for fields that have a Python-side default.
+See `app.services.ai_utils` for the shared Groq structured-output plumbing
+(model choice, strict-schema JSON-schema post-processing, `max_tokens`
+sizing) — also used by `app.services.ai_plan_generator` for live, per-user
+workout program generation.
 """
 
 import argparse
@@ -45,8 +42,7 @@ from app.db.session import async_session_factory
 from app.models.achievement import Achievement
 from app.models.challenge import Challenge
 from app.models.exercise import Exercise
-
-MODEL = "openai/gpt-oss-120b"
+from app.services.ai_utils import generate_structured, max_tokens_for
 
 # --- Schemas -------------------------------------------------------------
 # Every enum below mirrors a vocabulary another part of the app reads by
@@ -160,36 +156,6 @@ class ChallengeBatch(BaseModel):
     challenges: list[ChallengeGen]
 
 
-def strict_schema(model: type[BaseModel]) -> dict[str, Any]:
-    """Pydantic's `model_json_schema()` only marks a field `required` when
-    it has no Python-side default — Groq's strict mode requires *every*
-    property to be listed in `required` (a nullable/optional field is
-    expressed by its type accepting `null`, not by omitting it from
-    `required`) and every object to set `additionalProperties: false`.
-    Walks the schema (including `$defs`, array `items`, and `anyOf`/
-    `allOf`/`oneOf` branches) and forces both, recursively.
-    """
-    schema = model.model_json_schema()
-
-    def _tighten(node: Any) -> None:
-        if not isinstance(node, dict):
-            return
-        if node.get("type") == "object" and "properties" in node:
-            node["required"] = list(node["properties"].keys())
-            node["additionalProperties"] = False
-        for key in ("properties", "$defs"):
-            for v in node.get(key, {}).values():
-                _tighten(v)
-        if isinstance(node.get("items"), dict):
-            _tighten(node["items"])
-        for key in ("anyOf", "allOf", "oneOf"):
-            for v in node.get(key, []):
-                _tighten(v)
-
-    _tighten(schema)
-    return schema
-
-
 # --- Prompts ---------------------------------------------------------------
 
 _EXERCISE_PROMPT = """Generate {count} new strength-training exercises for FORMA, a strength-coaching app, as a JSON object matching the schema.
@@ -243,16 +209,6 @@ def _examples_json(items: list[dict[str, Any]], n: int, keys: list[str]) -> str:
     return json.dumps(sample, indent=2, default=str)
 
 
-async def _generate_batch(client: AsyncGroq, batch_model: type[BaseModel], schema_name: str, prompt: str) -> BaseModel:
-    response = await client.chat.completions.create(
-        model=MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        response_format={"type": "json_schema", "json_schema": {"name": schema_name, "strict": True, "schema": strict_schema(batch_model)}},
-    )
-    content = response.choices[0].message.content
-    return batch_model.model_validate_json(content)
-
-
 # --- Generation --------------------------------------------------------------
 
 
@@ -275,7 +231,7 @@ async def _generate_exercises(client: AsyncGroq, count: int, existing_slugs: set
         ],
     )
     prompt = _EXERCISE_PROMPT.format(count=count, existing_keys=sorted(existing_slugs), examples=examples)
-    batch = await _generate_batch(client, ExerciseBatch, "exercise_batch", prompt)
+    batch = await generate_structured(client, ExerciseBatch, "exercise_batch", prompt, max_tokens_for(count, per_item=700))
     assert isinstance(batch, ExerciseBatch)
     return batch.exercises
 
@@ -283,7 +239,7 @@ async def _generate_exercises(client: AsyncGroq, count: int, existing_slugs: set
 async def _generate_achievements(client: AsyncGroq, count: int, existing_keys: set[str]) -> list[AchievementGen]:
     examples = _examples_json(ACHIEVEMENTS, 6, ["key", "category", "title", "description", "icon", "criteria", "is_secret"])
     prompt = _ACHIEVEMENT_PROMPT.format(count=count, existing_keys=sorted(existing_keys), examples=examples)
-    batch = await _generate_batch(client, AchievementBatch, "achievement_batch", prompt)
+    batch = await generate_structured(client, AchievementBatch, "achievement_batch", prompt, max_tokens_for(count, per_item=300))
     assert isinstance(batch, AchievementBatch)
     return batch.achievements
 
@@ -291,7 +247,7 @@ async def _generate_achievements(client: AsyncGroq, count: int, existing_keys: s
 async def _generate_challenges(client: AsyncGroq, count: int, existing_keys: set[str]) -> list[ChallengeGen]:
     examples = _examples_json(CHALLENGES, 6, ["key", "title", "description", "metric", "period", "target_value", "icon", "is_group"])
     prompt = _CHALLENGE_PROMPT.format(count=count, existing_keys=sorted(existing_keys), examples=examples)
-    batch = await _generate_batch(client, ChallengeBatch, "challenge_batch", prompt)
+    batch = await generate_structured(client, ChallengeBatch, "challenge_batch", prompt, max_tokens_for(count, per_item=250))
     assert isinstance(batch, ChallengeBatch)
     return batch.challenges
 

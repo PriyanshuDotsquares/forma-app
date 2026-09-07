@@ -43,6 +43,7 @@ class ProgramsRepository {
     int? sessionMinutes,
     String? splitPreference,
     List<String>? equipment,
+    List<Map<String, dynamic>>? injuries,
   }) async {
     try {
       final response = await _client.dio.post(
@@ -54,6 +55,11 @@ class ProgramsRepository {
           if (sessionMinutes != null) 'session_minutes': sessionMinutes,
           if (splitPreference != null) 'split_preference': splitPreference,
           if (equipment != null) 'equipment': equipment,
+          // Sent explicitly (not read off the saved profile server-side)
+          // because during first-time onboarding this call happens *before*
+          // `PATCH /onboarding` persists it — see `GenerateProgramRequest`'s
+          // docstring on the backend.
+          if (injuries != null) 'injuries': injuries,
         },
       );
       return Program.fromJson(response.data as Map<String, dynamic>);

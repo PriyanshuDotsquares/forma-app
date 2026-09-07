@@ -105,6 +105,7 @@ class _Step9BuildingState extends ConsumerState<Step9Building> {
             sessionMinutes: answers.sessionMinutes,
             splitPreference: answers.splitPreference,
             equipment: answers.canonicalEquipment,
+            injuries: answers.injuries.map((i) => i.toJson()).toList(),
           );
 
       final payload = answers.toOnboardingPayload();

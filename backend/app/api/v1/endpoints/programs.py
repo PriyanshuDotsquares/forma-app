@@ -20,7 +20,8 @@ from app.schemas.program import (
     ProgramExerciseUpdate,
     ProgramRead,
 )
-from app.services.plan_generator import fill_day_exercises, generate_program
+from app.services.ai_plan_generator import generate_program_smart
+from app.services.plan_generator import fill_day_exercises
 
 router = APIRouter(prefix="/programs", tags=["programs"])
 
@@ -63,7 +64,7 @@ async def generate(
             detail="days_per_week is required (set it during onboarding or pass it explicitly)",
         )
 
-    return await generate_program(
+    return await generate_program_smart(
         db,
         user=current_user,
         goal=payload.goal or current_user.goal,
@@ -72,6 +73,7 @@ async def generate(
         session_minutes=payload.session_minutes or current_user.session_minutes,
         split_preference=payload.split_preference or current_user.split_preference,
         equipment=payload.equipment or current_user.equipment,
+        injuries=payload.injuries if payload.injuries is not None else current_user.injuries,
     )
 
 

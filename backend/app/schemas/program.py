@@ -1,4 +1,5 @@
 import uuid
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
@@ -7,7 +8,14 @@ from app.schemas.exercise import ExerciseRead
 
 class GenerateProgramRequest(BaseModel):
     """Explicit overrides for /programs/generate — falls back to the
-    caller's saved onboarding profile for any field left unset."""
+    caller's saved onboarding profile for any field left unset.
+
+    `injuries` exists here (as well as on the `User` row, set separately via
+    `PATCH /onboarding`) because during first-time onboarding the frontend
+    calls `/programs/generate` *before* it saves the onboarding profile —
+    `current_user.injuries` wouldn't be populated yet at generation time
+    otherwise. Same `{part, side, severity, note?}` shape as `User.injuries`.
+    """
 
     goal: str | None = None
     experience_level: str | None = None
@@ -15,6 +23,7 @@ class GenerateProgramRequest(BaseModel):
     session_minutes: int | None = None
     split_preference: str | None = None
     equipment: list[str] | None = None
+    injuries: list[dict[str, Any]] | None = None
 
 
 class ProgramExerciseCreate(BaseModel):

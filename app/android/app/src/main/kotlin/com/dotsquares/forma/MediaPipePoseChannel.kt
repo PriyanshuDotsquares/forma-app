@@ -1,4 +1,4 @@
-package com.dotsquares.forma
+package com.ds.forma
 
 import android.content.Context
 import android.graphics.Bitmap

@@ -1,0 +1,66 @@
+Status: Approved (Retroactive Baseline — documents behavior as implemented, dated 2026-09-10)
+Owner: Engineering team (retroactive)
+Related: n/a
+
+## Approach
+
+A classic read-model layer: Flutter screens watch Riverpod `FutureProvider`s that call a thin `ProgressRepository` over Dio, hitting FastAPI endpoints that delegate to plain Python aggregation functions in `app/services/progress.py`. There is no dedicated progress-aggregate table — every response is computed on demand from `WorkoutSession`/`WorkoutSet` (and `PersonalRecord` for PRs/strength). The one exception is `PersonalRecord`, which is written eagerly at set-logging time by `app/services/records.py::maybe_record_pr` (outside this module's read path) so that PR history/streaks don't need to be recomputed from raw sets on every read.
+
+## Architecture / Data Flow
+
+**Trace A — Progress Hub summary + row-links (`ProgressHubScreen`)**
+
+1. `ProgressHubScreen` (`app/lib/features/progress/presentation/progress_hub_screen.dart:19-71`) holds local `_period` state (default `'month'`) and renders `PeriodSelector`, `_SummaryGrid`, then one widget per topic: `_VolumeRow`, `_RecoveryRow`, `_StrengthFold`, `_FormQualityRow`, `_RecordsFold`, `_ConsistencyRow`.
+2. Each row independently calls `ref.watch(...)` on its own `FutureProvider` from `app/lib/features/progress/data/progress_providers.dart`: `progressSummaryProvider(period)`, `volumeByMuscleProvider(period)`, `recoveryProvider`, `formQualityTrendProvider(...)`, `consistencyCalendarProvider(...)`; `_StrengthFold`/`_RecordsFold` instead watch `personalRecordsProvider` from the achievements feature (`app/lib/features/achievements/data/achievements_providers.dart:23-25`), which is Riverpod-deduped so both folds share one fetch.
+3. Every `progress*` provider resolves `progressRepositoryProvider` (`progress_providers.dart:11-13`), which constructs `ProgressRepository(ref.watch(apiClientProvider))` — `apiClientProvider` lives in `app/lib/core/network/providers.dart` and owns the shared `Dio` instance/base URL/auth header injection.
+4. `ProgressRepository` (`app/lib/features/progress/data/progress_repository.dart`) issues a plain `_client.dio.get(...)` per method (e.g. `summary()` → `GET /progress/summary?period=...`, line 12-19) and maps the JSON body/array into the typed domain models in `app/lib/features/progress/domain/progress_models.dart` via each model's `fromJson`.
+5. On the backend, `backend/app/api/v1/endpoints/progress.py` routes each call (`/progress/summary`, `/volume/by-muscle`, `/volume/trend`, `/recovery`, `/strength`, `/form-quality`, `/consistency`), resolving `current_user` via `get_current_user` and validating `period` against `_VALID_PERIODS` (400 on mismatch, `_check_period`, lines 25-27).
+6. Each endpoint calls the matching function in `backend/app/services/progress.py` (e.g. `summary`, `volume_by_muscle`, `recovery`), which queries `WorkoutSession`/`WorkoutSet` (eager-loaded via `selectinload`) through `_fetch_sessions` (lines 54-68), aggregates in Python, and returns Pydantic schema instances from `backend/app/schemas/progress.py`.
+7. FastAPI serializes the schema to JSON; Dio returns it to `ProgressRepository`; the provider resolves; the corresponding hub row rebuilds from `AsyncValue.data`, with dedicated `loading`/`error` branches per row (e.g. `_RecoveryRow.build`, `progress_hub_screen.dart:161-203`).
+8. Tapping a row-link (`HubRowLink.onTap`, `app/lib/features/progress/presentation/widgets/hub_row_link.dart`) calls `context.push(AppRoutes.progress*)` (routes registered in `app/lib/core/router/app_router.dart:70-74`), navigating to the matching detail screen, which re-watches the same provider (cached/shared by Riverpod when params match).
+
+**Trace B — Recovery detail screen (`RecoveryDetailScreen`)**
+
+1. `RecoveryDetailScreen` (`app/lib/features/progress/presentation/recovery_detail_screen.dart:13-71`) watches `recoveryProvider` (no params) and, best-effort, `activeProgramControllerProvider` to resolve today's scheduled `ProgramDay` (`_todayProgramDay`, lines 77-84) for suggestion tailoring — a slow/failed program fetch does not block rendering.
+2. `recoveryProvider` (`progress_providers.dart:32-34`) calls `ProgressRepository.recovery()` (`progress_repository.dart:39-46`) → `GET /progress/recovery` (no query params).
+3. `backend/app/api/v1/endpoints/progress.py:60-65` routes to `progress_service.recovery(db, current_user.id)`.
+4. `backend/app/services/progress.py::recovery` (lines 141-174): fetches finished sessions from the last 3 months (`_fetch_sessions(db, user_id, "3month")`); for each set, for each of the exercise's `primary_muscles`, tracks `last_trained[muscle]` (latest session start) and `sets_last_session[muscle]` (set count within that latest session).
+5. It then iterates the fixed `_RECOVERY_WINDOW_HOURS` dict (10 entries: chest/back/quads/hamstrings/glutes=48h, shoulders/calves=36h, biceps/triceps/core=24h) — **not** the set of muscles actually trained — and builds one `RecoveryItem` per group: untrained → `recovered_pct=100.0`, `last_trained=None`, `fresh_in_hours=0`; trained → `recovered_pct = min(100, round(hours_since/window_hours*100))`, `fresh_in_hours = max(0, window_hours - hours_since)` or `None` once that's `<= 0`.
+6. The 10-item list is returned as `list[RecoveryItem]` (`backend/app/schemas/progress.py:27-32`), serialized to JSON, parsed client-side by `RecoveryItem.fromJson` (`domain/progress_models.dart:71-77`).
+7. `_Content` (`recovery_detail_screen.dart:86-173`) sorts items ascending by `recoveredPct`, renders `RecoverySilhouette` (per-zone tint via `recoveryColor`, `presentation/widgets/recovery_silhouette.dart`), a legend, an `InfoBanner` suggestion (`_suggestion`/`_generalSuggestion`, lines 138-172), and a full sorted list of `_RecoveryItemRow`s each showing `recoveredPct`, last-trained relative date, sets last session, and a "Ready"/"fresh in ~Nh" readout.
+
+## Data / Schema
+
+**Flutter domain models** (`app/lib/features/progress/domain/progress_models.dart`): `ProgressSummary`, `VolumeByMuscle`, `VolumeTrendPoint` (with `isDeload`), `RecoveryItem` (with nullable `lastTrained`/`freshInHours`), `StrengthPoint`, `FormQualityPoint`, `ConsistencyDay` (with `hasPr`) — each a plain immutable class with a `fromJson` factory, no `toJson`/mutation (read-only feature).
+
+**Backend Pydantic schemas** (`backend/app/schemas/progress.py`): mirror the Flutter models field-for-field (snake_case ↔ camelCase), e.g. `RecoveryItem(muscle_group, last_trained: date | None, sets_last_session, recovered_pct, fresh_in_hours: float | None)`.
+
+**SQLAlchemy models actually read by this module**: `PersonalRecord` (`backend/app/models/record.py`) — `user_id`, `exercise_id`, `weight_kg`, `reps`, `est_1rm_kg`, `workout_set_id`, `achieved_at` (server-default `now()`, tz-aware). Written by `backend/app/services/records.py::maybe_record_pr` using the Epley formula (`estimate_1rm_kg`, `weight_kg * (1 + reps/30)`, rounded to 1dp; reps ≤ 1 returns `weight_kg` unchanged) whenever a logged set beats the user's prior best for that exercise; the winning set is flagged `is_pr = True` on `WorkoutSet`. `WorkoutSession`/`WorkoutSet` (referenced, not owned by this module) supply `started_at`, `ended_at`, `duration_s`, `avg_form_score`, and per-set `actual_weight_kg`, `actual_reps`, `form_score`, `is_pr`, `exercise.primary_muscles`.
+
+**Unused model**: `BodyMetric` (`backend/app/models/body_metric.py`) — `user_id`, `date`, `weight_kg`; table created by migration `561d62621de3_fitness_domain_rewrite_drop_keepsakes_.py`, related from `User.body_metrics`. No schema, service, endpoint, repository method, or screen anywhere references it — dead schema, not a used part of this module's data flow.
+
+**Fixed constants driving behavior**: `_RECOVERY_WINDOW_HOURS` (`backend/app/services/progress.py:29-40`, 10 muscle groups); `kPushMuscles`/`kPullMuscles`/`kUpperMuscles`/`kLowerMuscles` (`app/lib/features/progress/presentation/widgets/progress_format.dart:11-14`, a client-side-only judgment-call mapping used solely for the Volume screen's balance ratios — `core` is deliberately excluded from all four sets per the code's own comment).
+
+## Alternatives Considered
+
+N/A — retroactive baseline.
+
+## Testing Strategy
+
+No automated tests exist for this module — gap. `app/test/` contains exactly one file, `widget_test.dart`, an unrelated smoke test asserting the signed-out app renders the login screen; it does not touch any progress screen, provider, repository, or widget. There is no `backend/tests` directory at all (confirmed absent from the repo, `.venv`-bundled third-party test suites aside), so none of `progress.py`'s aggregation logic (recovery windows, deload detection, PR-beating comparison, period bucketing) has regression coverage.
+
+## Risks / Edge Cases
+
+- **Verified "nothing trained yet" edge case**: `recovery()` always returns exactly 10 `RecoveryItem`s (one per fixed muscle group), never an empty list — even for a brand-new account. Untrained groups default to `recovered_pct=100.0`. The hub's `_RecoveryRow` (`progress_hub_screen.dart:166-181`) explicitly checks `least.first.recoveredPct >= 100` before choosing "Fully recovered" over naming a muscle as "needs the most time" — the code comment confirms this was a deliberate fix for the case where nothing has been trained ("naming one as 'needs the most time' when they're all fully fresh ... reads backwards").
+- **Dead/unreachable empty-state branches**: because `recovery()` never returns an empty list, the `items.isEmpty` branches in both `_RecoveryRow` (`progress_hub_screen.dart:166-173`, "No training data yet") and `RecoveryDetailScreen`'s `_Content` (`recovery_detail_screen.dart:96-105`, same copy) are currently unreachable via the real backend — they'd only fire if the endpoint itself returned `[]`, which the code as written cannot produce.
+- **`fresh_in_hours` literal `0` vs. `null`**: for an untrained muscle, the backend sets `fresh_in_hours=0` (an int, not `None`) rather than omitting it (`services/progress.py:160`). This is inconsistent with the "trained but now ready" case, which sets it to `None` once `<= 0`. It happens to render correctly client-side only because `_RecoveryItemRow`'s `ready` check (`recovery_detail_screen.dart:272`) treats both `null` and `<= 0` as "Ready" — but the two states reach that same UI outcome via different values, worth flattening if the schema is touched again.
+- **Two different "fully recovered" thresholds**: the hub row uses `recoveredPct >= 100` for its "Fully recovered" copy, while the detail screen's general suggestion (`_generalSuggestion`, `recovery_detail_screen.dart:165-172`) uses `>= 85` for "You're fresh across the board." Both are legitimate, deliberate thresholds for different copy, but they're easy to conflate since they read as the same concept.
+- **Volume attribution**: each set counts toward only `exercise.primary_muscles[0]` (`services/progress.py:104`) — the first listed primary muscle. Secondary muscles are never counted, and multi-primary-muscle exercises only credit one. A muscle's "sets" count includes sets with no weight/reps logged (bodyweight, warm-ups), but `volume_kg` only sums sets where both `actual_weight_kg` and `actual_reps` are present (`_set_volume`, lines 71-74) — so a muscle can show a high set count with disproportionately low volume.
+- **Month-label bucket collisions for `year`/`all`**: `volume_trend`'s monthly bucketing (`monthly = period in ("year", "all")`, lines 116-129) keys buckets by `strftime("%b")` (e.g. `"Jan"`) with no year component. For the `all` period (unbounded lookback), a multi-year training history would merge same-named months from different years into one bucket.
+- **Pro-gating implemented via two independent mechanisms**: the hub's `_FormQualityRow` short-circuits on the client using `user?.isPro` (`progress_hub_screen.dart:311-319`) and never calls the endpoint when false, while `FormQualityDetailScreen` always calls the endpoint and catches the server's 402 (`form_quality_detail_screen.dart:41-50`, `ApiException.isPaymentRequired`). Both ultimately key off the same `subscription_tier` field, but a client/server drift (e.g. stale cached `User.isPro`) could make the two surfaces disagree about whether the feature is locked.
+
+## Backlog / Known Gaps
+
+- `backend/app/models/body_metric.py` (`BodyMetric` model + `body_metrics` table, migration `561d62621de3`) has zero consumers — no Pydantic schema, no service function, no endpoint, no Flutter repository method, provider, or screen. Body-weight-history tracking is schema-only, not a shipped feature. (The unrelated `User.weight_kg` field, set once at onboarding via `step3_numbers.dart`/`onboarding_controller.dart`, is the only weight data actually surfaced anywhere in the app.)
+- No dedicated top-level route/screen for strength trend or full PR history — both are folded directly onto the hub (`_StrengthFold`, `_RecordsFold` in `progress_hub_screen.dart`, both explicitly commented as intentional: "no dedicated top-level strength route" / "no dedicated records route").
+- No automated tests covering any progress provider, repository, screen, or backend aggregation function — see Testing Strategy.

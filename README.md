@@ -1,6 +1,6 @@
 # FORMA
 
-A personal memory-keeping app. Flutter frontend + Python (FastAPI) backend.
+An AI-coached strength-training app. Flutter frontend + Python (FastAPI) backend.
 
 ```
 FORMA/
@@ -10,23 +10,32 @@ FORMA/
 
 ## Status
 
-Full working app, built without the Figma design (the connector could not
-be reached from this session — see below), using original UI/UX judgment
-for a warm, nostalgic "memory keeper" aesthetic (theme in
-`app/lib/core/theme/app_theme.dart`). Once Figma access works, ask again
-to pull the real screens/tokens and restyle to match.
+Full working app, styled to match FORMA's real Figma screens ("Cast Iron &
+Chalk Dust" design system — near-black surfaces, IWF-plate accent colors,
+no shadows/gradients/emoji; theme in `app/lib/core/design_system/`).
 
-**App:** email/password auth (register, login, persisted session, logout),
-profile editing, a searchable/filterable keepsake grid, create/edit with
-photo upload (camera or gallery) and a memory date, favoriting, and delete.
+**App:** a 9-step onboarding quiz that generates a personalized weekly
+training program (deterministic rule-based generation, optionally
+LLM-personalized via Groq with an automatic fallback); active-workout set
+logging with real on-device camera form coaching (MediaPipe pose
+detection, rep counting, spoken coaching cues); progress analytics
+(volume, recovery, personal records, form-quality trend); achievements and
+weekly/monthly challenges; a Profile tab and Settings (notification
+preferences, voice-coach tuning, English/Hindi localization); a Premium
+screen with real (but store-unconfigured) in-app-purchase plumbing.
 
-**Backend:** JWT auth, user profile endpoints, keepsakes CRUD (search,
-favorite filter, pagination), image upload served over `/static`.
-Verified end-to-end (Flutter web → FastAPI → Postgres) during setup —
-every flow above was exercised against a live server, not just written.
+**Backend:** JWT auth with password reset, a curated 47-exercise library,
+program/workout/progress/achievement/challenge domain models and
+endpoints, and an AI plan-generation service (Groq-hosted LLM with a
+deterministic fallback so plan generation never hard-fails).
 
-Figma file (pending access):
-https://www.figma.com/design/aUcWsto79BraPlypKaW6Hr/Untitled
+## Documentation
+
+FORMA follows Spec-Driven Development. [SPEC_DRIVEN_DEVELOPMENT.md](SPEC_DRIVEN_DEVELOPMENT.md)
+covers the process, architecture, tech stack, and a full module catalog;
+[specs/INDEX.md](specs/INDEX.md) is the per-module spec catalog with
+notable findings. Start there before making a behavior change to any
+existing feature.
 
 ## Backend — run locally
 

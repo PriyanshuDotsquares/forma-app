@@ -14,7 +14,12 @@ app = FastAPI(title=settings.project_name)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
-    allow_credentials=True,
+    # The client authenticates with a bearer JWT (Authorization header), never
+    # cookies, so allow_credentials is not needed here — and combined with a
+    # wildcard allow_origins it lets any origin make credentialed requests
+    # (Starlette reflects the request's Origin whenever credentials are
+    # allowed). Leaving it False closes that hole without affecting the app.
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )

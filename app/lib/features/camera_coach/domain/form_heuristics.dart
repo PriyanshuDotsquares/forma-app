@@ -4,7 +4,7 @@ import 'rep_counter.dart';
 /// angle ranges for form scoring, instead of hand-tuning each of FORMA's
 /// ~46 seeded exercises individually. These patterns cover the bulk of the
 /// library; anything that doesn't match falls back to [generic].
-enum MovementPattern { press, squat, hinge, pull, bentOverRow, generic }
+enum MovementPattern { press, squat, hinge, pull, bentOverRow, flyIsolation, generic }
 
 /// Infers a [MovementPattern] from an exercise's name and primary muscles.
 /// This is a keyword heuristic, not a classifier — it's meant to be good
@@ -16,15 +16,29 @@ MovementPattern inferMovementPattern({required String exerciseName, required Lis
 
   bool nameHasAny(List<String> words) => words.any(name.contains);
 
-  if (nameHasAny(['squat', 'lunge', 'leg press', 'leg extension']) || muscles.contains('quads')) {
+  // Checked ahead of the hinge match below: a leg curl flexes the knee with
+  // the hip essentially fixed, so `hinge`'s hip-driven counter (tuned for
+  // deadlifts/RDLs) would barely see the hip angle move and miss reps. Route
+  // it to `squat`'s knee-driven counter instead — same joint, same rough
+  // extended-to-flexed direction, even though the movement itself differs.
+  if (nameHasAny(['squat', 'lunge', 'leg press', 'leg extension', 'leg curl']) || muscles.contains('quads')) {
     return MovementPattern.squat;
   }
-  if (nameHasAny(['deadlift', 'hip thrust', 'romanian', 'rdl', 'good morning', 'leg curl']) ||
+  if (nameHasAny(['deadlift', 'hip thrust', 'romanian', 'rdl', 'good morning']) ||
       muscles.contains('hamstrings') ||
       muscles.contains('glutes')) {
     return MovementPattern.hinge;
   }
-  if (nameHasAny(['press', 'push-up', 'pushup', 'dip', 'fly']) ||
+  // Checked ahead of the chest/shoulders muscle match below: these are
+  // fly/crossover/raise-type isolation moves — the elbow stays roughly
+  // fixed throughout the rep (unlike a true press), so they need
+  // shoulder-angle-driven tracking instead of `press`'s elbow-driven one.
+  // Muscle alone (chest/shoulders) can't distinguish these from a press,
+  // hence the name-keyword check.
+  if (nameHasAny(['fly', 'flye', 'crossover', 'cross-over', 'pullover', 'lateral raise', 'front raise', 'rear delt'])) {
+    return MovementPattern.flyIsolation;
+  }
+  if (nameHasAny(['press', 'push-up', 'pushup', 'dip']) ||
       muscles.contains('chest') ||
       muscles.contains('shoulders') ||
       muscles.contains('triceps')) {
@@ -117,6 +131,13 @@ const Map<MovementPattern, List<_Rule>> _rulesByPattern = {
     // standing the hips up to heave the weight, so the ideal band mirrors
     // a hinge stance instead.
     _Rule(joint: _Joint.hip, idealLow: 45, idealHigh: 100, weight: 40, cue: 'Keep your hinge — avoid standing up to heave the weight'),
+  ],
+  MovementPattern.flyIsolation: [
+    // Flies/crossovers/raises are shoulder-driven with the elbow held at a
+    // roughly constant soft bend throughout — flag it locking out straight
+    // (loses tension, risks the elbow joint) or collapsing too tight
+    // (turns the fly into a press).
+    _Rule(joint: _Joint.elbow, idealLow: 15, idealHigh: 45, weight: 100, cue: 'Keep a soft, steady bend in your elbows'),
   ],
   MovementPattern.generic: [
     // No pattern-specific cue table — just flag genuinely extreme,

@@ -1,0 +1,207 @@
+[
+ {
+  "screen": "splash",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "intro",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "auth (login/register)",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "forgot-password",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "reset-password",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "onboarding steps 1-8",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "onboarding plan-preview",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "onboarding save-plan",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "today",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "plan overview",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "plan day editor",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "exercise library",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "exercise detail",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "session preview",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "workout history",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "progress hub",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "progress volume",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "progress recovery",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "progress form-quality",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "progress consistency",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "coach entry",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "camera precheck",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "active workout",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "exercise picker sheet",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "set entry sheet",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "post-set summary sheet",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "rest timer sheet",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "start workout sheet",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "workout summary",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "form report",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "profile",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "achievements list",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "challenges list",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "settings",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "settings equipment",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "settings notifications sheet",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "settings change password sheet",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "settings delete account",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "voice-coach settings",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "language",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ },
+ {
+  "screen": "premium",
+  "status": "not_started",
+  "note": "cycle 2026-10-01 regression"
+ }
+]

@@ -42,7 +42,7 @@ FORMA coaches lifters through sets without a human trainer or wearable hardware.
 - Any backend endpoint or server-side storage for pose/rep/form data — confirmed absent (`grep` across `backend/` for pose/rep/camera-coach terms returns only a comment referencing this module's own disclaimer text, in `backend/app/services/ai_plan_generator.py:107`).
 - Video/frame recording or upload — frames are consumed in memory per-frame and discarded.
 - Per-exercise-tuned ideal joint-angle ranges — scoring is keyed by one of 6 coarse `MovementPattern`s (press/squat/hinge/pull/bentOverRow/generic) shared across FORMA's ~46 seeded exercises, not tuned per exercise.
-- GPU-accelerated inference — both platforms explicitly configure the MediaPipe CPU delegate.
+- ~~GPU-accelerated inference~~ — now in scope: both platforms request the GPU delegate and fall back to CPU when it cannot initialise.
 - True 3D or biomechanically-validated form assessment — see Non-Functional Requirements; this is an explicitly-disclaimed 2D heuristic.
 - Ducking other apps' background audio — `VoiceCoach.duckMusic` exists as a settings passthrough only; the class deliberately does not attempt real audio ducking (`data/voice_coach.dart:45-52`).
 - Logging the set to the backend — persistence stays module 005's `WorkoutRepository.logSet()` responsibility, triggered only by an explicit "LOG SET" tap, not automatically on set finish.
@@ -51,9 +51,19 @@ FORMA coaches lifters through sets without a human trainer or wearable hardware.
 - A single bad camera frame, a native-channel error, or a missing model asset must never crash the app — every native/platform-channel call site catches and degrades to "no pose"/an init-failure result (documented explicitly as a convention in `data/mediapipe/mediapipe_pose_detector.dart:22-26`).
 - Frame processing is best-effort and drop-newest-when-busy rather than queued, so live coaching latency stays bounded on slower devices at the cost of not processing every frame.
 - Pose detection must run entirely on-device with no network calls from this module (verified: no `dio`/`http` import in any of the 6 module files).
-- Native `detect()` calls are serialized onto one dedicated background thread per platform (a `DispatchQueue` on iOS, a single-thread `Executor` on Android) because MediaPipe forbids concurrent calls against one landmarker instance and `detect()` blocks its calling thread.
+- Native detections are serialized: one is in flight at a time per platform (Dart `_isBusy` plus a native `pending` slot), run through live-stream mode (`detectAsync`) on a dedicated background thread, because MediaPipe forbids concurrent use of one landmarker and the reusable input buffer is read asynchronously.
 - The native pose-landmarker instance is a process-lifetime singleton on both platforms, deliberately never torn down between coaching sessions, to avoid repeatedly reloading the ~9.4MB model (`ios/Runner/MediaPipePoseChannel.swift:10-20`, mirrored in `MediaPipePoseChannel.kt:27-38`).
 - Spoken feedback is rate-limited per the user's verbosity setting so the coach doesn't talk over every rep or repeat itself back-to-back.
 
 ## Open Questions
 None recorded — no TODO/FIXME comments or unresolved design notes found in any of the six module files, the native platform-channel implementations, or the module-005 call sites read for this baseline.
+
+## Tempo (added)
+- WHEN a rep completes, THE SYSTEM SHALL measure its lowering time and lifting time as the travel time between the top and bottom threshold crossings, excluding rest at the top, the setup time before rep 1, and the confirmation hold (`domain/rep_counter.dart`, `RepResult`).
+- WHEN the exercise is pull-type (pull, bent-over row, fly/crossover, generic), THE SYSTEM SHALL swap the counter's raw phases so "lowering" is always the controlled return and "lifting" the effort (`domain/tempo_summary.dart`, `fallingPhaseIsLowering`).
+- WHILE a set is being tracked, THE SYSTEM SHALL show the last rep's lowering/lifting time and, from the second timed rep, the running average on the camera screen, each line showing lowering, lifting and the pause at the bottom for that rep (`live_tracking_overlay.dart`, `_LiveTempoStrip`).
+- WHEN a set is logged after camera tracking, THE SYSTEM SHALL show an overall TEMPO card in the post-set summary: average lowering/lifting time and average pause, consistency, pace trend (needs >= 4 timed reps), fastest/slowest rep and every rep's lowering/lifting/pause times (`post_set_summary_sheet.dart`).
+- A phase that could not be timed SHALL be shown as unknown, never as 0.0s.
+- Tempo SHALL be reported only. It SHALL NOT affect the form score, raise a cue or be spoken, because there is no validated target tempo to grade against.
+- Tempo is not persisted to the backend: the set-logging API has no field for it, so it exists for the current session only.
+

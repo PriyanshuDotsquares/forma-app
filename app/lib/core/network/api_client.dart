@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -30,6 +31,20 @@ class ApiClient {
           handler.next(options);
         },
         onError: (error, handler) async {
+          if (kDebugMode) {
+            // The UI layer only ever shows a generic "could not reach the
+            // server" message (see `ApiException.fromDioException`) — that's
+            // right for users, but it makes a real connectivity bug
+            // indistinguishable from a genuinely offline device without
+            // this. `error.type`/`error.message`/`error.error` carry the
+            // actual dart:io/TLS failure the generic message hides.
+            debugPrint(
+              'ApiClient: request failed — ${error.requestOptions.method} ${error.requestOptions.uri}\n'
+              '  type: ${error.type}\n'
+              '  message: ${error.message}\n'
+              '  error: ${error.error}',
+            );
+          }
           if (error.response?.statusCode == 401) {
             await clearToken();
             onUnauthorized?.call();

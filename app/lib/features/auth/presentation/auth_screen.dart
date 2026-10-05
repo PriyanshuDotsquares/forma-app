@@ -53,9 +53,6 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       } else {
         await auth.login(email: _emailController.text.trim(), password: _passwordController.text);
       }
-      if (!mounted) return; // router already navigated away on success — nothing left to update
-      final state = ref.read(authControllerProvider);
-      if (state.hasError) throw state.error!;
     } catch (e) {
       if (!mounted) return;
       setState(() => _error = e is ApiException ? e.message : 'Something went wrong. Please try again.');
@@ -70,8 +67,11 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        leading: const BackButton(),
-        title: Text(l10n.createAccountTitle),
+        // `pop` when there is a screen underneath (the intro pushes this one);
+        // otherwise — opened directly, e.g. after a password reset — go to the
+        // intro. A bare BackButton does nothing when the stack has one entry.
+        leading: BackButton(onPressed: () => context.canPop() ? context.pop() : context.go(AppRoutes.intro)),
+        title: Text(_mode == _Mode.signUp ? l10n.createAccountTitle : l10n.signInTab),
       ),
       body: SafeArea(
         child: SingleChildScrollView(
@@ -89,8 +89,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                   ),
                   child: Row(
                     children: [
-                      Expanded(child: _ModeTab(label: l10n.signUpTab, selected: _mode == _Mode.signUp, onTap: () => setState(() => _mode = _Mode.signUp))),
-                      Expanded(child: _ModeTab(label: l10n.signInTab, selected: _mode == _Mode.signIn, onTap: () => setState(() => _mode = _Mode.signIn))),
+                      Expanded(child: _ModeTab(label: l10n.signUpTab, selected: _mode == _Mode.signUp, onTap: () => setState(() { _mode = _Mode.signUp; _error = null; }))),
+                      Expanded(child: _ModeTab(label: l10n.signInTab, selected: _mode == _Mode.signIn, onTap: () => setState(() { _mode = _Mode.signIn; _error = null; }))),
                     ],
                   ),
                 ),
@@ -114,10 +114,6 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                   },
                   onChanged: (_) => setState(() {}),
                 ),
-                if (_error != null && _mode == _Mode.signUp) ...[
-                  const SizedBox(height: AppSpacing.xs),
-                  Text(_error!, style: AppTypography.body(size: 12, color: AppColors.error)),
-                ],
                 const SizedBox(height: AppSpacing.lg),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,

@@ -23,6 +23,6 @@ class Env {
   static String get apiBaseUrl {
     if (_override.isNotEmpty) return _override;
     if (!kIsWeb && Platform.isAndroid) return 'http://10.0.2.2:8000/api/v1';
-    return 'http://localhost:8000/api/v1';
+    return 'http://192.168.8.228:8000/api/v1';
   }
-}
+} 

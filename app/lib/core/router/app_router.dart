@@ -135,6 +135,14 @@ final routerProvider = Provider<GoRouter>((ref) {
       // fixes both: the error banner shows, and a successful login skips
       // an unnecessary splash flash too.
       if (authState.isLoading) return (isSplash || isAuth || isAuthAdjacent) ? null : AppRoutes.splash;
+      // A failed startup session check (network/backend unreachable — see
+      // `AuthController.build()`'s doc comment) is not the same as being
+      // signed out: the stored token is still intact, just unverified.
+      // Keep the user on the splash/retry screen instead of bouncing them
+      // to the marketing intro screen, which would suggest they need to
+      // sign in again when a retry could succeed with zero re-entered
+      // credentials.
+      if (authState.hasError) return isSplash ? null : AppRoutes.splash;
       if (!loggedIn) return (isIntro || isAuth || isAuthAdjacent) ? null : AppRoutes.intro;
       if (loggedIn && !onboarded) return isOnboarding ? null : AppRoutes.onboarding;
       if (loggedIn && onboarded && (isSplash || isIntro || isAuth)) return AppRoutes.today;

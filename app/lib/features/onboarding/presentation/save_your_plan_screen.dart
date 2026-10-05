@@ -127,7 +127,7 @@ class SaveYourPlanScreen extends ConsumerWidget {
                     child: TextButton(
                       onPressed: continueWithEmail,
                       child: Text(
-                        'NOT NOW — KEEP IT ON THIS DEVICE ONLY',
+                        'SKIP — I\'LL SET THIS UP LATER',
                         style: AppTypography.body(size: 11, weight: FontWeight.w700, color: AppColors.textMuted).copyWith(letterSpacing: 0.6),
                       ),
                     ),

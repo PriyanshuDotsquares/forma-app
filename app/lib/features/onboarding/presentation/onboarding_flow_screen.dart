@@ -39,6 +39,12 @@ class _OnboardingFlowScreenState extends State<OnboardingFlowScreen> {
   }
 
   void _goTo(int page) {
+    // Steps with a text field (height/weight on step 3) leave the keyboard
+    // focused when "Continue" is tapped — without this, it stays open and
+    // covers the next step's content even when that step has no text field
+    // at all (e.g. step 4's location picker cards get pushed up behind the
+    // still-open numeric keypad).
+    FocusScope.of(context).unfocus();
     _pageController.animateToPage(
       page.clamp(0, _lastPage),
       duration: const Duration(milliseconds: 280),
@@ -56,7 +62,13 @@ class _OnboardingFlowScreenState extends State<OnboardingFlowScreen> {
       child: PageView(
         controller: _pageController,
         physics: const NeverScrollableScrollPhysics(),
-        onPageChanged: (page) => setState(() => _currentPage = page),
+        onPageChanged: (page) {
+          // Belt and braces with `_goTo`: whatever moved the page (Continue,
+          // Back, the system back gesture), the next step must not inherit an
+          // open keyboard from the one before it.
+          FocusManager.instance.primaryFocus?.unfocus();
+          setState(() => _currentPage = page);
+        },
         children: [
           Step1Goal(onContinue: () => _goTo(1)),
           Step2Experience(onBack: () => _goTo(0), onContinue: () => _goTo(2)),

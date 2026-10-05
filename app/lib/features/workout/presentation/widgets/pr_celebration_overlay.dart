@@ -146,7 +146,7 @@ class _PrCelebrationScreen extends StatelessWidget {
                           Navigator.of(context).pop();
                           SharePlus.instance.share(ShareParams(text: _shareText));
                         },
-                        icon: const Icon(Icons.ios_share, size: 16),
+                        icon: const Icon(Icons.ios_share),
                         label: const Text('SHARE'),
                       ),
                     ),

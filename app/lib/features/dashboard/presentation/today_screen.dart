@@ -142,7 +142,7 @@ class _Header extends StatelessWidget {
         ),
         IconButton(
           icon: const Icon(Icons.notifications_none),
-          onPressed: () {},
+          onPressed: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Coming soon.'))),
         ),
         CircleAvatar(
           radius: 20,
@@ -185,7 +185,16 @@ class _NoProgramCard extends ConsumerWidget {
   }
 }
 
+/// Guards the two "start a workout" buttons on this screen against a
+/// double-tap firing two `startSession` calls (and creating two sessions
+/// server-side) — there's no per-button local state to hang a `_starting`
+/// flag off since both buttons live in stateless `ConsumerWidget`s, so this
+/// is shared instead.
+final _startingSessionProvider = StateProvider.autoDispose<bool>((ref) => false);
+
 Future<void> _startSession(BuildContext context, WidgetRef ref, {String? programDayId, required String label}) async {
+  if (ref.read(_startingSessionProvider)) return;
+  ref.read(_startingSessionProvider.notifier).state = true;
   try {
     final session = await ref.read(workoutRepositoryProvider).startSession(programDayId: programDayId, label: label);
     if (context.mounted) context.push(AppRoutes.workoutActive(session.id));
@@ -194,6 +203,8 @@ Future<void> _startSession(BuildContext context, WidgetRef ref, {String? program
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(e is ApiException ? e.message : 'Could not start workout. Please try again.')),
     );
+  } finally {
+    ref.read(_startingSessionProvider.notifier).state = false;
   }
 }
 
@@ -223,6 +234,7 @@ class _WorkoutDayCard extends ConsumerWidget {
       }
     }
     final completed = (startedToday?.sets.length ?? 0).clamp(0, totalSets);
+    final starting = ref.watch(_startingSessionProvider);
 
     return Container(
       padding: const EdgeInsets.all(AppSpacing.lg),
@@ -260,8 +272,10 @@ class _WorkoutDayCard extends ConsumerWidget {
           SizedBox(
             width: double.infinity,
             child: FilledButton(
-              onPressed: () => _startSession(context, ref, programDayId: day.id, label: day.label),
-              child: const Text('START WORKOUT'),
+              onPressed: starting ? null : () => _startSession(context, ref, programDayId: day.id, label: day.label),
+              child: starting
+                  ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Text('START WORKOUT'),
             ),
           ),
           const SizedBox(height: AppSpacing.sm),
@@ -418,6 +432,7 @@ class _RestDayCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final bars = _coarseRecoveryBars(recovery, const ['chest', 'back', 'legs']);
+    final starting = ref.watch(_startingSessionProvider);
 
     return Container(
       padding: const EdgeInsets.all(AppSpacing.lg),
@@ -481,8 +496,10 @@ class _RestDayCard extends ConsumerWidget {
               const SizedBox(width: AppSpacing.sm),
               Expanded(
                 child: OutlinedButton(
-                  onPressed: () => _startSession(context, ref, label: 'Freestyle workout'),
-                  child: const Text('TRAIN ANYWAY'),
+                  onPressed: starting ? null : () => _startSession(context, ref, label: 'Freestyle workout'),
+                  child: starting
+                      ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Text('TRAIN ANYWAY'),
                 ),
               ),
             ],

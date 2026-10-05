@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../../core/design_system/design_system.dart';
+import '../../../camera_coach/domain/tempo_summary.dart';
 import '../../domain/workout_session.dart';
 
 /// Shows the post-set summary sheet: reps/depth/form for the set just
@@ -20,6 +21,7 @@ Future<void> showPostSetSummarySheet(
   required bool isLastSetOfWorkout,
   int? goodReps,
   int? badReps,
+  TempoSummary? tempo,
 }) {
   return showModalBottomSheet<void>(
     context: context,
@@ -35,6 +37,7 @@ Future<void> showPostSetSummarySheet(
       isLastSetOfWorkout: isLastSetOfWorkout,
       goodReps: goodReps,
       badReps: badReps,
+      tempo: tempo,
     ),
   );
 }
@@ -69,6 +72,7 @@ class PostSetSummarySheet extends StatelessWidget {
     required this.isLastSetOfWorkout,
     this.goodReps,
     this.badReps,
+    this.tempo,
   });
 
   final int setIndex;
@@ -83,11 +87,20 @@ class PostSetSummarySheet extends StatelessWidget {
   final int? goodReps;
   final int? badReps;
 
+  /// Overall lowering/lifting tempo from live camera coaching (null when the
+  /// set wasn't camera-tracked or no rep could be timed).
+  final TempoSummary? tempo;
+
   List<_ComparisonRow> _comparisonRows() {
     final baseline = baselineSet;
     if (baseline == null) return const [];
 
-    _ComparisonRow? row(String label, num? oldValue, num? newValue, String Function(num) fmt) {
+    _ComparisonRow? row(
+      String label,
+      num? oldValue,
+      num? newValue,
+      String Function(num) fmt,
+    ) {
       if (oldValue == null || newValue == null) return null;
       return _ComparisonRow(
         label: label,
@@ -99,9 +112,24 @@ class PostSetSummarySheet extends StatelessWidget {
     }
 
     return [
-      row('Reps', baseline.actualReps, loggedSet.actualReps, (v) => v.toStringAsFixed(0)),
-      row('Depth', baseline.depthPct, loggedSet.depthPct, (v) => '${v.round()}%'),
-      row('Form', baseline.formScore, loggedSet.formScore, (v) => v.toStringAsFixed(0)),
+      row(
+        'Reps',
+        baseline.actualReps,
+        loggedSet.actualReps,
+        (v) => v.toStringAsFixed(0),
+      ),
+      row(
+        'Depth',
+        baseline.depthPct,
+        loggedSet.depthPct,
+        (v) => '${v.round()}%',
+      ),
+      row(
+        'Form',
+        baseline.formScore,
+        loggedSet.formScore,
+        (v) => v.toStringAsFixed(0),
+      ),
     ].whereType<_ComparisonRow>().toList();
   }
 
@@ -114,112 +142,163 @@ class PostSetSummarySheet extends StatelessWidget {
     return SafeArea(
       top: false,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.lg, AppSpacing.lg, AppSpacing.lg),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SectionLabel('Set ${setIndex + 1} · $exerciseName'),
-            const SizedBox(height: AppSpacing.xs),
-            Text(_qualityHeadline(formScore), style: AppTypography.display(size: 26)),
-            const SizedBox(height: AppSpacing.lg),
-            IntrinsicHeight(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Expanded(
-                    child: _MetricCard(
-                      label: 'Reps',
-                      value: loggedSet.actualReps?.toString() ?? '—',
-                      footer: GestureDetector(
-                        onTap: () => Navigator.of(context).pop(),
-                        child: Text('Edit', style: AppTypography.body(size: 12, weight: FontWeight.w600, color: AppColors.accentBlue)),
+        padding: const EdgeInsets.fromLTRB(
+          AppSpacing.lg,
+          AppSpacing.lg,
+          AppSpacing.lg,
+          AppSpacing.lg,
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SectionLabel('Set ${setIndex + 1} · $exerciseName'),
+              const SizedBox(height: AppSpacing.xs),
+              Text(
+                _qualityHeadline(formScore),
+                style: AppTypography.display(size: 26),
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              IntrinsicHeight(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(
+                      child: _MetricCard(
+                        label: 'Reps',
+                        value: loggedSet.actualReps?.toString() ?? '—',
+                        footer: GestureDetector(
+                          onTap: () => Navigator.of(context).pop(),
+                          child: Text(
+                            'Edit',
+                            style: AppTypography.body(
+                              size: 12,
+                              weight: FontWeight.w600,
+                              color: AppColors.accentBlue,
+                            ),
+                          ),
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: AppSpacing.sm),
-                  Expanded(
-                    child: _MetricCard(
-                      label: 'Avg Depth',
-                      value: depthPct == null ? '—' : '${depthPct.round()}%',
-                      valueColor: depthPct == null ? null : _qualityColor(depthPct.round()),
+                    const SizedBox(width: AppSpacing.sm),
+                    Expanded(
+                      child: _MetricCard(
+                        label: 'Avg Depth',
+                        value: depthPct == null ? '—' : '${depthPct.round()}%',
+                        valueColor: depthPct == null
+                            ? null
+                            : _qualityColor(depthPct.round()),
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: AppSpacing.sm),
-                  Expanded(
-                    child: _MetricCard(
-                      label: 'Form',
-                      value: formScore?.toString() ?? '—',
-                      valueColor: formScore == null ? null : _qualityColor(formScore),
-                      footer: formScore == null
-                          ? null
-                          : Text(
-                              _qualityCaption(formScore),
-                              style: AppTypography.body(size: 12, weight: FontWeight.w600, color: _qualityColor(formScore)),
-                            ),
+                    const SizedBox(width: AppSpacing.sm),
+                    Expanded(
+                      child: _MetricCard(
+                        label: 'Form',
+                        value: formScore?.toString() ?? '—',
+                        valueColor: formScore == null
+                            ? null
+                            : _qualityColor(formScore),
+                        footer: formScore == null
+                            ? null
+                            : Text(
+                                _qualityCaption(formScore),
+                                style: AppTypography.body(
+                                  size: 12,
+                                  weight: FontWeight.w600,
+                                  color: _qualityColor(formScore),
+                                ),
+                              ),
+                      ),
                     ),
-                  ),
-                ],
-              ),
-            ),
-            if (goodReps != null && badReps != null && (goodReps! + badReps!) > 0) ...[
-              const SizedBox(height: AppSpacing.sm),
-              Row(
-                children: [
-                  const Icon(Icons.check_circle, size: 14, color: AppColors.accentGreen),
-                  const SizedBox(width: 4),
-                  Text(
-                    '$goodReps good',
-                    style: AppTypography.body(size: 12, weight: FontWeight.w600, color: AppColors.textSecondary),
-                  ),
-                  const SizedBox(width: AppSpacing.md),
-                  const Icon(Icons.error, size: 14, color: AppColors.accentRed),
-                  const SizedBox(width: 4),
-                  Text(
-                    '$badReps needs work',
-                    style: AppTypography.body(size: 12, weight: FontWeight.w600, color: AppColors.textSecondary),
-                  ),
-                ],
-              ),
-            ],
-            if (coachingNote != null) ...[
-              const SizedBox(height: AppSpacing.md),
-              InfoBanner(
-                title: 'ONE THING TO FIX',
-                body: coachingNote,
-                icon: Icons.warning_amber_rounded,
-                accent: AppColors.accentAmber,
-              ),
-            ],
-            if (comparisonRows.isNotEmpty) ...[
-              const SizedBox(height: AppSpacing.md),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(AppSpacing.md),
-                decoration: BoxDecoration(
-                  color: AppColors.surfaceBase,
-                  borderRadius: BorderRadius.circular(AppRadius.card),
-                  border: Border.all(color: AppColors.outlineVariant),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const SectionLabel('VS LAST TIME'),
-                    const SizedBox(height: AppSpacing.sm),
-                    ...comparisonRows,
                   ],
                 ),
               ),
-            ],
-            const SizedBox(height: AppSpacing.lg),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: Text(isLastSetOfWorkout ? 'Save set · finish workout' : 'Save set · start rest'),
+              if (goodReps != null &&
+                  badReps != null &&
+                  (goodReps! + badReps!) > 0) ...[
+                const SizedBox(height: AppSpacing.sm),
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.check_circle,
+                      size: 14,
+                      color: AppColors.accentGreen,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      '$goodReps good',
+                      style: AppTypography.body(
+                        size: 12,
+                        weight: FontWeight.w600,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                    const SizedBox(width: AppSpacing.md),
+                    const Icon(
+                      Icons.error,
+                      size: 14,
+                      color: AppColors.accentRed,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      '$badReps needs work',
+                      style: AppTypography.body(
+                        size: 12,
+                        weight: FontWeight.w600,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+              if (tempo != null) ...[
+                const SizedBox(height: AppSpacing.md),
+                _TempoCard(tempo: tempo!),
+              ],
+              if (coachingNote != null) ...[
+                const SizedBox(height: AppSpacing.md),
+                InfoBanner(
+                  title: 'ONE THING TO FIX',
+                  body: coachingNote,
+                  icon: Icons.warning_amber_rounded,
+                  accent: AppColors.accentAmber,
+                ),
+              ],
+              if (comparisonRows.isNotEmpty) ...[
+                const SizedBox(height: AppSpacing.md),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(AppSpacing.md),
+                  decoration: BoxDecoration(
+                    color: AppColors.surfaceBase,
+                    borderRadius: BorderRadius.circular(AppRadius.card),
+                    border: Border.all(color: AppColors.outlineVariant),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SectionLabel('VS LAST TIME'),
+                      const SizedBox(height: AppSpacing.sm),
+                      ...comparisonRows,
+                    ],
+                  ),
+                ),
+              ],
+              const SizedBox(height: AppSpacing.lg),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: Text(
+                    isLastSetOfWorkout
+                        ? 'Save set · finish workout'
+                        : 'Save set · start rest',
+                  ),
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -227,7 +306,12 @@ class PostSetSummarySheet extends StatelessWidget {
 }
 
 class _MetricCard extends StatelessWidget {
-  const _MetricCard({required this.label, required this.value, this.valueColor, this.footer});
+  const _MetricCard({
+    required this.label,
+    required this.value,
+    this.valueColor,
+    this.footer,
+  });
 
   final String label;
   final String value;
@@ -252,13 +336,27 @@ class _MetricCard extends StatelessWidget {
             children: [
               Text(
                 label.toUpperCase(),
-                style: AppTypography.body(size: 11, weight: FontWeight.w700, color: AppColors.textMuted).copyWith(letterSpacing: 1.0),
+                style: AppTypography.body(
+                  size: 11,
+                  weight: FontWeight.w700,
+                  color: AppColors.textMuted,
+                ).copyWith(letterSpacing: 1.0),
               ),
               const SizedBox(height: AppSpacing.xs),
-              Text(value, style: AppTypography.mono(size: 24, weight: FontWeight.w700, color: valueColor)),
+              Text(
+                value,
+                style: AppTypography.mono(
+                  size: 24,
+                  weight: FontWeight.w700,
+                  color: valueColor,
+                ),
+              ),
             ],
           ),
-          if (footer != null) ...[const SizedBox(height: AppSpacing.xs), footer!],
+          if (footer != null) ...[
+            const SizedBox(height: AppSpacing.xs),
+            footer!,
+          ],
         ],
       ),
     );
@@ -266,7 +364,13 @@ class _MetricCard extends StatelessWidget {
 }
 
 class _ComparisonRow extends StatelessWidget {
-  const _ComparisonRow({required this.label, required this.oldText, required this.newText, required this.improved, required this.worsened});
+  const _ComparisonRow({
+    required this.label,
+    required this.oldText,
+    required this.newText,
+    required this.improved,
+    required this.worsened,
+  });
 
   final String label;
   final String oldText;
@@ -276,14 +380,137 @@ class _ComparisonRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = improved ? AppColors.accentGreen : (worsened ? AppColors.accentRed : AppColors.textSecondary);
+    final color = improved
+        ? AppColors.accentGreen
+        : (worsened ? AppColors.accentRed : AppColors.textSecondary);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label, style: AppTypography.body(size: 13, color: AppColors.textSecondary)),
-          Text('$oldText → $newText', style: AppTypography.mono(size: 13, weight: FontWeight.w600, color: color)),
+          Text(
+            label,
+            style: AppTypography.body(size: 13, color: AppColors.textSecondary),
+          ),
+          Text(
+            '$oldText → $newText',
+            style: AppTypography.mono(
+              size: 13,
+              weight: FontWeight.w600,
+              color: color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Overall tempo for the set: average lowering / lifting time, how steady the
+/// pace was, and each rep's times. Descriptive only — tempo is never graded.
+class _TempoCard extends StatelessWidget {
+  const _TempoCard({required this.tempo});
+
+  final TempoSummary tempo;
+
+  @override
+  Widget build(BuildContext context) {
+    final pause = tempo.avgPauseSeconds;
+    final timed = tempo.reps.where((r) => r.isComplete).toList();
+
+    Widget stat(IconData icon, String label, String value) => Expanded(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 14, color: AppColors.accentBlue),
+              const SizedBox(width: 4),
+              Text(
+                label,
+                style: AppTypography.body(
+                  size: 11,
+                  weight: FontWeight.w700,
+                  color: AppColors.textMuted,
+                ).copyWith(letterSpacing: 1.0),
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          Text(
+            value,
+            style: AppTypography.mono(size: 22, weight: FontWeight.w700),
+          ),
+        ],
+      ),
+    );
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceBase,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        border: Border.all(color: AppColors.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SectionLabel('TEMPO'),
+          const SizedBox(height: AppSpacing.sm),
+          Row(
+            children: [
+              stat(
+                Icons.arrow_downward,
+                'LOWERING',
+                TempoSummary.fmt(tempo.avgLoweringSeconds),
+              ),
+              stat(
+                Icons.arrow_upward,
+                'LIFTING',
+                TempoSummary.fmt(tempo.avgLiftingSeconds),
+              ),
+              if (pause != null)
+                stat(Icons.pause, 'AVG PAUSE', TempoSummary.fmt(pause)),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          Text(
+            [
+              tempo.consistency.label,
+              if (tempo.trend != null) tempo.trend!.label,
+            ].join(' · '),
+            style: AppTypography.body(
+              size: 12,
+              weight: FontWeight.w600,
+              color: AppColors.textSecondary,
+            ),
+          ),
+          if (timed.length >= 2) ...[
+            const SizedBox(height: 2),
+            Text(
+              'Fastest rep ${tempo.fastest.index} (${TempoSummary.fmt(tempo.fastest.totalSeconds)}) · '
+              'slowest rep ${tempo.slowest.index} (${TempoSummary.fmt(tempo.slowest.totalSeconds)})',
+              style: AppTypography.body(size: 12, color: AppColors.textMuted),
+            ),
+          ],
+          if (timed.isNotEmpty) ...[
+            const SizedBox(height: AppSpacing.sm),
+            Wrap(
+              spacing: AppSpacing.md,
+              runSpacing: 2,
+              children: [
+                for (final r in timed)
+                  Text(
+                    '${r.index}: ↓${TempoSummary.fmt(r.loweringSeconds)} ↑${TempoSummary.fmt(r.liftingSeconds)} ⏸${TempoSummary.fmt(r.pauseSeconds)}',
+                    style: AppTypography.mono(
+                      size: 11,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+              ],
+            ),
+          ],
         ],
       ),
     );

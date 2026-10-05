@@ -22,3 +22,5 @@ services:
         value: "1440"
       - key: CORS_ORIGINS
         value: '["*"]'
+      - key: GROQ_API_KEY
+        sync: false

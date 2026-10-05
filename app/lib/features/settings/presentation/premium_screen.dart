@@ -55,26 +55,27 @@ class _PremiumScreenState extends State<PremiumScreen> {
   Future<void> _startTrial(BuildContext context) async {
     final available = await InAppPurchase.instance.isAvailable();
     if (!context.mounted) return;
-    if (!available) {
-      showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Not available yet'),
-          content: const Text(
-            "In-app purchases aren't configured for this build yet — there's no live product to buy. "
-            "This won't unlock Pro or change your subscription.",
-          ),
-          actions: [TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('OK'))],
+    // Neither branch can actually complete a purchase yet — there are no
+    // real product IDs registered in this environment (a real integration
+    // would continue past `isAvailable()` with `queryProductDetails` for
+    // configured product IDs and `buyNonConsumable`/`buyConsumable`, then
+    // apply the entitlement server-side once the purchase stream confirms
+    // it — left as plumbing rather than faked). Both branches still owe the
+    // user an honest response instead of a silent no-op on tap.
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Not available yet'),
+        content: Text(
+          available
+              ? "Purchases aren't set up for this build yet — there's no live product to buy. "
+                    "This won't unlock Pro or change your subscription."
+              : "In-app purchases aren't available on this device right now — there's no live product to buy. "
+                    "This won't unlock Pro or change your subscription.",
         ),
-      );
-      return;
-    }
-    // A real integration would continue here with `queryProductDetails` for
-    // the configured product IDs and `buyNonConsumable`/`buyConsumable`,
-    // then apply the entitlement server-side once the purchase stream
-    // confirms it. There are no real product IDs registered in this
-    // environment, so `isAvailable()` gates the flow before it can reach
-    // that point — the plumbing is left ready rather than faked.
+        actions: [TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('OK'))],
+      ),
+    );
   }
 
   @override

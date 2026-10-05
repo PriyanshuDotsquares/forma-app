@@ -216,12 +216,18 @@ class _ChallengeCardState extends ConsumerState<_ChallengeCard> {
                 child: uc.joined
                     ? OutlinedButton(
                         onPressed: _busy ? null : _toggleJoin,
-                        style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md)),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.xs),
+                          minimumSize: Size.zero,
+                        ),
                         child: Text(_busy ? '…' : 'LEAVE'),
                       )
                     : FilledButton(
                         onPressed: _busy ? null : _toggleJoin,
-                        style: FilledButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md)),
+                        style: FilledButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.xs),
+                          minimumSize: Size.zero,
+                        ),
                         child: Text(_busy ? '…' : 'JOIN'),
                       ),
               ),

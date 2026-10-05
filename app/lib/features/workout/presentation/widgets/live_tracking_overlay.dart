@@ -9,9 +9,9 @@ import '../../../camera_coach/data/pose_service.dart';
 import '../../../camera_coach/data/voice_coach.dart';
 import '../../../camera_coach/domain/form_heuristics.dart';
 import '../../../camera_coach/domain/rep_counter.dart';
+import '../../../camera_coach/domain/tempo_summary.dart';
 import '../../../programs/domain/exercise.dart';
 import 'pose_angle_mapper.dart';
-import 'pose_painter.dart';
 
 /// What a live-coached set produced, handed back to the active-workout
 /// screen so it can prefill the normal (still-editable) reps/weight entry
@@ -25,6 +25,7 @@ class LiveSetResult {
     required this.goodReps,
     required this.badReps,
     this.dominantFlaggedJoint,
+    this.tempo,
   });
 
   final int reps;
@@ -43,6 +44,10 @@ class LiveSetResult {
   /// caller surface an exercise-specific [Exercise.mistakes] entry instead
   /// of a generic note.
   final FlaggedJoint? dominantFlaggedJoint;
+
+  /// Overall lowering/lifting tempo for the set, or null when no rep could be
+  /// timed. Reported only — never part of [formScore].
+  final TempoSummary? tempo;
 }
 
 /// Full-screen live camera coaching for one set: camera preview, a pose
@@ -56,12 +61,18 @@ class LiveTrackingOverlay extends StatefulWidget {
     required this.voiceCoachSettings,
     required this.onFinish,
     required this.onCancel,
+    this.targetReps,
   });
 
   final Exercise exercise;
   final VoiceCoachSettings voiceCoachSettings;
   final ValueChanged<LiveSetResult> onFinish;
   final VoidCallback onCancel;
+
+  /// The planned rep count for this set, if known. Once the live counter
+  /// reaches it, the set auto-finishes (same as tapping "Finish set")
+  /// instead of waiting for the lifter to stop and tap manually.
+  final int? targetReps;
 
   @override
   State<LiveTrackingOverlay> createState() => _LiveTrackingOverlayState();
@@ -75,20 +86,29 @@ class _LiveTrackingOverlayState extends State<LiveTrackingOverlay> {
 
   bool _initializing = true;
   PoseServiceInitResult? _initResult;
-  Size? _imageSize;
-  bool _mirror = false;
   bool _paused = false;
 
-  Pose? _latestPose;
   FormSnapshot _snapshot = FormSnapshot.empty;
   RepResult? _lastRep;
   final List<bool> _repFlags = []; // one per completed rep; true = flagged/red
+
+  /// One entry per completed rep, in lowering/lifting terms. Feeds the live
+  /// per-rep readout and, at the end of the set, the overall tempo summary.
+  final List<RepTempo> _repTempos = [];
+  late final bool _fallingIsLowering;
+
+  /// True while a tracked landmark sits at the edge of the frame this
+  /// frame — takes priority over ordinary form cues (see
+  /// `pose_angle_mapper.dart`'s `JointAngles.outOfFrame` doc comment for
+  /// why a confidence check alone doesn't catch this).
+  bool _outOfFrame = false;
 
   @override
   void initState() {
     super.initState();
     final pattern = inferMovementPattern(exerciseName: widget.exercise.name, primaryMuscles: widget.exercise.primaryMuscles);
     _formHeuristics = FormHeuristics(pattern: pattern);
+    _fallingIsLowering = fallingPhaseIsLowering(pattern);
     final config = repCounterConfigFor(pattern);
     _repCounter = RepCounter(
       drivingJoint: config.drivingJoint,
@@ -108,7 +128,6 @@ class _LiveTrackingOverlayState extends State<LiveTrackingOverlay> {
       setState(() {
         _initResult = result;
         _initializing = false;
-        _mirror = _poseService.controller.description.lensDirection == CameraLensDirection.front;
       });
       _poseService.startStream(_handlePose);
     } else {
@@ -121,23 +140,40 @@ class _LiveTrackingOverlayState extends State<LiveTrackingOverlay> {
 
   void _handlePose(Pose? pose) {
     if (!mounted || _paused) return;
-    final angles = pose == null ? const JointAngles() : jointAnglesFromPose(pose);
+    // Not `controller.value.previewSize` — see `PoseCoachService.
+    // lastFrameSize`'s doc comment for why that's unreliable on Android.
+    // Already reflects *this* frame's size: `_frameFor` records it before
+    // the detector ever runs, so it's current by the time this callback
+    // fires with a result.
+    final frameSize = _poseService.lastFrameSize;
+    final angles = pose == null ? const JointAngles() : jointAnglesFromPose(pose, imageSize: frameSize);
     final snapshot = _formHeuristics.evaluateFrame(angles);
     _formHeuristics.addSample(angles);
-    _repCounter.addSample(angles);
+    // Skip extrapolated landmarks feeding the *driving* joint specifically
+    // (not JointAngles.outOfFrame's blanket every-landmark flag — a bench
+    // press's legs are routinely cropped out of shot and are irrelevant to
+    // whether the elbow angle driving its counter is trustworthy).
+    final drivingJointOutOfFrame = pose != null && isDrivingJointOutOfFrame(pose, frameSize, _repCounter.drivingJoint);
+    if (!drivingJointOutOfFrame) {
+      _repCounter.addSample(angles);
+    }
 
     if (!mounted) return;
     setState(() {
-      _latestPose = pose;
       _snapshot = snapshot;
-      // Not `controller.value.previewSize` — see `PoseCoachService.
-      // lastFrameSize`'s doc comment for why that's unreliable on Android.
-      _imageSize = _poseService.lastFrameSize ?? _imageSize;
+      _outOfFrame = angles.outOfFrame;
     });
-    if (snapshot.cues.isNotEmpty) {
+    // Out-of-frame takes priority over every other cue — a form rule
+    // evaluated on an extrapolated landmark isn't meaningful, so it's
+    // pointless (and confusing) to speak one instead.
+    if (_outOfFrame) {
+      unawaited(_voiceCoach.speak('Step back — you’re at the edge of the frame'));
+    } else if (snapshot.cues.isNotEmpty) {
       unawaited(_voiceCoach.speak(snapshot.cues.first));
     }
   }
+
+  bool _finishing = false;
 
   void _handleRepCompleted(RepResult result) {
     final flagged = !_formHeuristics.repLookedGood;
@@ -146,10 +182,15 @@ class _LiveTrackingOverlayState extends State<LiveTrackingOverlay> {
     setState(() {
       _lastRep = result;
       _repFlags.add(flagged);
+      _repTempos.add(RepTempo.fromRep(result, fallingIsLowering: _fallingIsLowering));
     });
     unawaited(_voiceCoach.announceRep(result.index));
     if (!flagged) {
       unawaited(_voiceCoach.speakEncouragement('Nice rep'));
+    }
+    final target = widget.targetReps;
+    if (target != null && _repCounter.repCount >= target) {
+      unawaited(_finish());
     }
   }
 
@@ -163,6 +204,8 @@ class _LiveTrackingOverlayState extends State<LiveTrackingOverlay> {
   }
 
   Future<void> _finish() async {
+    if (_finishing) return;
+    _finishing = true;
     await _poseService.stopStream();
     final badReps = _repFlags.where((flagged) => flagged).length;
     widget.onFinish(
@@ -173,6 +216,7 @@ class _LiveTrackingOverlayState extends State<LiveTrackingOverlay> {
         goodReps: _repFlags.length - badReps,
         badReps: badReps,
         dominantFlaggedJoint: _formHeuristics.dominantFlaggedJoint,
+        tempo: TempoSummary.fromReps(_repTempos),
       ),
     );
   }
@@ -181,10 +225,7 @@ class _LiveTrackingOverlayState extends State<LiveTrackingOverlay> {
     final wasPaused = _paused;
     final result = await _poseService.switchCamera();
     if (!mounted) return;
-    setState(() {
-      _mirror = _poseService.controller.description.lensDirection == CameraLensDirection.front;
-      _paused = wasPaused;
-    });
+    setState(() => _paused = wasPaused);
     if (result != PoseServiceInitResult.ready) return;
   }
 
@@ -210,27 +251,20 @@ class _LiveTrackingOverlayState extends State<LiveTrackingOverlay> {
         fit: StackFit.expand,
         children: [
           CameraPreview(_poseService.controller),
-          if (_imageSize != null)
-            CustomPaint(
-              painter: PoseSkeletonPainter(
-                pose: _latestPose,
-                imageSize: _imageSize!,
-                mirror: _mirror,
-                flaggedElbow: _snapshot.flaggedElbow,
-                flaggedHip: _snapshot.flaggedHip,
-                flaggedKnee: _snapshot.flaggedKnee,
-              ),
-            ),
           SafeArea(
             child: Column(
               children: [
                 _TopBar(exerciseName: widget.exercise.name, onSwitchCamera: _switchCamera, onClose: widget.onCancel),
-                if (_snapshot.cues.isNotEmpty) _CueBanner(cue: _snapshot.cues.first),
+                if (_outOfFrame)
+                  const _CueBanner(cue: 'STEP BACK — you’re at the edge of the frame')
+                else if (_snapshot.cues.isNotEmpty)
+                  _CueBanner(cue: _snapshot.cues.first),
                 const Spacer(),
                 _BottomPanel(
                   repCount: _repCounter.repCount,
                   romPct: _lastRep?.romPct,
                   repFlags: _repFlags,
+                  repTempos: _repTempos,
                   paused: _paused,
                   onTogglePause: _togglePause,
                   onFinishSet: _finish,
@@ -304,6 +338,7 @@ class _BottomPanel extends StatelessWidget {
     required this.repCount,
     required this.romPct,
     required this.repFlags,
+    required this.repTempos,
     required this.paused,
     required this.onTogglePause,
     required this.onFinishSet,
@@ -312,6 +347,7 @@ class _BottomPanel extends StatelessWidget {
   final int repCount;
   final double? romPct;
   final List<bool> repFlags;
+  final List<RepTempo> repTempos;
   final bool paused;
   final VoidCallback onTogglePause;
   final VoidCallback onFinishSet;
@@ -342,6 +378,10 @@ class _BottomPanel extends StatelessWidget {
                   )
                   .toList(),
             ),
+            const SizedBox(height: AppSpacing.md),
+          ],
+          if (repTempos.isNotEmpty) ...[
+            _LiveTempoStrip(repTempos: repTempos),
             const SizedBox(height: AppSpacing.md),
           ],
           Row(
@@ -392,6 +432,62 @@ class _BottomPanel extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// The last rep's tempo, plus the running average once there are two timed reps.
+///
+/// Arrow down = lowering phase, arrow up = lifting phase, pause icon = time held
+/// at the bottom (shown for every rep, however short). A phase that could not
+/// be timed shows "—" rather than a made-up number. Purely informational: no
+/// colour judgement, because tempo is reported and never graded.
+class _LiveTempoStrip extends StatelessWidget {
+  const _LiveTempoStrip({required this.repTempos});
+
+  final List<RepTempo> repTempos;
+
+  @override
+  Widget build(BuildContext context) {
+    final last = repTempos.last;
+    final summary = TempoSummary.fromReps(repTempos);
+    final showAverage = summary != null && summary.timedReps >= 2;
+
+    Widget phase(IconData icon, double? seconds) => Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 14, color: AppColors.accentBlue),
+        const SizedBox(width: 2),
+        Text(TempoSummary.fmt(seconds), style: AppTypography.mono(size: 14, weight: FontWeight.w600)),
+      ],
+    );
+
+    Widget label(String text) =>
+        Text(text, style: AppTypography.body(size: 10, weight: FontWeight.w700, color: AppColors.textMuted).copyWith(letterSpacing: 1.0));
+
+    Widget line(String name, double? lowering, double? lifting, double? pause) => Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        SizedBox(width: 52, child: label(name)),
+        phase(Icons.arrow_downward, lowering),
+        const SizedBox(width: AppSpacing.md),
+        phase(Icons.arrow_upward, lifting),
+        const SizedBox(width: AppSpacing.md),
+        phase(Icons.pause, pause),
+      ],
+    );
+
+    // Two short lines rather than one long one: with a pause on each, a single
+    // row for "this rep" plus "average" would not fit a phone's width.
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        line('REP ${last.index}', last.loweringSeconds, last.liftingSeconds, last.pauseSeconds),
+        if (showAverage) ...[
+          const SizedBox(height: 2),
+          line('AVG', summary.avgLoweringSeconds, summary.avgLiftingSeconds, summary.avgPauseSeconds),
+        ],
+      ],
     );
   }
 }

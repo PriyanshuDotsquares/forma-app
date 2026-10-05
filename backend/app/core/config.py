@@ -1,7 +1,10 @@
+import logging
 from functools import lru_cache
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -39,13 +42,32 @@ class Settings(BaseSettings):
     smtp_password: str | None = None
     smtp_from: str = "noreply@forma.app"
 
-    # Used only by `app.db.ai_seed` (a manually-run script, not called at
-    # request time or during `alembic upgrade`) to generate new exercises/
-    # achievements/challenges via the Groq API. Unset in most
-    # environments — the app runs fine without it.
+    # Used by `app.db.ai_seed` (a manually-run script) to generate new
+    # exercises/achievements/challenges, AND by `ai_plan_generator.
+    # generate_program_smart` at request time to produce each user's
+    # AI-personalized program. The app *runs* without it, but silently and
+    # permanently: every `/programs/generate` call falls back to
+    # `plan_generator`'s deterministic heuristic instead, with no error
+    # surfaced anywhere — see `get_settings()`'s startup check below, which
+    # exists specifically to catch this in logs before it looks like "the
+    # AI feature doesn't work" for every user.
     groq_api_key: str | None = None
 
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    if not settings.groq_api_key:
+        # Not fatal — `generate_program_smart` degrades to a deterministic
+        # plan on purpose so onboarding never hard-fails — but that
+        # degradation is otherwise completely silent (no warning, no error
+        # response), so every user would get the same non-AI plan with
+        # nothing in the logs to explain why. This is the one place that
+        # runs unconditionally at startup, so it's the right place to make
+        # the misconfiguration visible instead of only discoverable by
+        # reading code.
+        logger.warning(
+            "GROQ_API_KEY is not set — AI-personalized program generation is disabled; "
+            "every /programs/generate call will silently fall back to the deterministic generator."
+        )
+    return settings

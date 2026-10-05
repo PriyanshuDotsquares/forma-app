@@ -133,7 +133,7 @@ class _Step3NumbersState extends ConsumerState<Step3Numbers> {
             width: double.infinity,
             child: OutlinedButton.icon(
               onPressed: _pickDob,
-              icon: const Icon(Icons.calendar_today, size: 16),
+              icon: const Icon(Icons.calendar_today),
               label: Align(alignment: Alignment.centerLeft, child: Text(dobLabel)),
               style: OutlinedButton.styleFrom(alignment: Alignment.centerLeft),
             ),

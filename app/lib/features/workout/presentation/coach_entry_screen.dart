@@ -17,43 +17,56 @@ final _activeProgramForCoachProvider = FutureProvider.autoDispose<Program?>(
 
 /// The COACH tab's landing screen: start a new workout (optionally against
 /// today's program day), or resume one already in progress.
-class CoachEntryScreen extends ConsumerWidget {
+class CoachEntryScreen extends ConsumerStatefulWidget {
   const CoachEntryScreen({super.key});
 
+  @override
+  ConsumerState<CoachEntryScreen> createState() => _CoachEntryScreenState();
+}
+
+class _CoachEntryScreenState extends ConsumerState<CoachEntryScreen> {
+  bool _starting = false;
+
   Future<void> _startWorkout(BuildContext context, WidgetRef ref) async {
-    Program? program;
+    if (_starting) return;
+    setState(() => _starting = true);
     try {
-      program = await ref.read(_activeProgramForCoachProvider.future);
-    } catch (_) {
-      program = null;
-    }
-    if (!context.mounted) return;
-
-    String? programDayId;
-    var label = 'Freestyle';
-    if (program != null && program.days.any((d) => !d.isRest)) {
-      final choice = await showStartWorkoutSheet(context, program: program);
-      if (choice == null) return; // sheet dismissed without a choice
-      if (!choice.isFreestyle && choice.day != null) {
-        programDayId = choice.day!.id;
-        label = choice.day!.label;
+      Program? program;
+      try {
+        program = await ref.read(_activeProgramForCoachProvider.future);
+      } catch (_) {
+        program = null;
       }
-    }
-    if (!context.mounted) return;
-
-    final messenger = ScaffoldMessenger.of(context);
-    try {
-      final session = await ref.read(workoutRepositoryProvider).startSession(programDayId: programDayId, label: label);
-      ref.invalidate(sessionListProvider);
       if (!context.mounted) return;
-      context.push(AppRoutes.workoutActive(session.id));
-    } on ApiException catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+
+      String? programDayId;
+      var label = 'Freestyle';
+      if (program != null && program.days.any((d) => !d.isRest)) {
+        final choice = await showStartWorkoutSheet(context, program: program);
+        if (choice == null) return; // sheet dismissed without a choice
+        if (!choice.isFreestyle && choice.day != null) {
+          programDayId = choice.day!.id;
+          label = choice.day!.label;
+        }
+      }
+      if (!context.mounted) return;
+
+      final messenger = ScaffoldMessenger.of(context);
+      try {
+        final session = await ref.read(workoutRepositoryProvider).startSession(programDayId: programDayId, label: label);
+        ref.invalidate(sessionListProvider);
+        if (!context.mounted) return;
+        context.push(AppRoutes.workoutActive(session.id));
+      } on ApiException catch (e) {
+        messenger.showSnackBar(SnackBar(content: Text(e.message)));
+      }
+    } finally {
+      if (mounted) setState(() => _starting = false);
     }
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final sessionsAsync = ref.watch(sessionListProvider);
 
     return Scaffold(
@@ -113,7 +126,12 @@ class CoachEntryScreen extends ConsumerWidget {
                 else
                   SizedBox(
                     width: double.infinity,
-                    child: FilledButton(onPressed: () => _startWorkout(context, ref), child: const Text('START A WORKOUT')),
+                    child: FilledButton(
+                      onPressed: _starting ? null : () => _startWorkout(context, ref),
+                      child: _starting
+                          ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                          : const Text('START A WORKOUT'),
+                    ),
                   ),
               ],
             );

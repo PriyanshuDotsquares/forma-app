@@ -1,3 +1,4 @@
+import Accelerate
 import CoreVideo
 import Flutter
 import MediaPipeTasksVision
@@ -7,26 +8,81 @@ import UIKit
 /// reached from Dart via `forma/pose_landmarker` (see
 /// `lib/features/camera_coach/data/mediapipe/mediapipe_pose_detector.dart`).
 ///
-/// The landmarker is a lazily-created singleton, never torn down for the
-/// life of the app — reloading its ~9MB model every time a coaching screen
-/// opens/closes would be wasteful, and MediaPipe's own samples treat a
-/// task instance as long-lived. Every `detect` call is funneled through
-/// one serial `DispatchQueue`, which is what actually guarantees two
-/// `detect()` calls never run concurrently against the same instance (a
-/// documented MediaPipe requirement) — this holds even if two Dart-side
-/// `PoseCoachService`s transiently overlap, since the constraint lives
-/// here, not per Dart instance. Runs in `IMAGE` (synchronous) mode: one
-/// `detect()` call blocks the calling thread until inference finishes, so
-/// it must never run on the platform/main thread — hence the queue.
+/// Mirrors `android/.../MediaPipePoseChannel.kt`. The design follows the
+/// GymDemo POC's iOS fan-out, minus WebRTC: here the user's own phone camera
+/// (Flutter `camera` plugin) is the only frame source, so there is no shared
+/// capture pipeline to protect.
+///
+/// ## What changed from the first version, and why
+///
+/// - **`.liveStream` instead of `.image`.** In `.image` mode every frame is an
+///   independent full detection. `.liveStream` keeps tracking state between
+///   frames, so the heavy detector only runs when the pose is lost.
+/// - **GPU delegate with CPU fallback.** The fallback is logged, never silent.
+/// - **Pixels are rotated and letterboxed by us, not by MediaPipe.** The frame
+///   is scaled, rotated upright and padded into a reusable 256x256 BGRA buffer
+///   with vImage, so the landmarks come back in a space we constructed. The
+///   first version passed an `orientation` and *assumed* MediaPipe returned
+///   landmarks in the unrotated buffer's space, then rotated them back by
+///   hand — an assumption that was never verified on hardware.
+///
+/// ## The Dart contract is unchanged
+///
+/// `detect` still resolves with 33 landmarks in the *upright frame's pixel
+/// space* (or `nil`), so `PoseCoachService` needs no changes. The result now
+/// arrives through MediaPipe's live-stream delegate; the Flutter reply is held
+/// until then. One detection is in flight at a time — Dart's `_isBusy` gate
+/// guarantees it and `pending` enforces it here, which is also what makes
+/// reusing one pixel buffer safe (MediaPipe reads it asynchronously).
 enum MediaPipePoseChannel {
   private enum PoseChannelError: Error {
     case modelNotFound
-    case notInitialized
+    case landmarkerUnavailable
     case imageBuildFailed
+    case conversionFailed(String)
   }
+
+  /// Square edge handed to inference. The model works at 256x256 internally.
+  private static let size = 256
+
+  /// A reply that never arrives would wedge Dart's `_isBusy` gate forever, so a
+  /// detection is abandoned (reported as "no pose") after this long.
+  private static let resultTimeout: TimeInterval = 2.0
 
   private static let queue = DispatchQueue(label: "forma.pose_landmarker")
   private static var landmarker: PoseLandmarker?
+  private static let liveStreamDelegate = LiveStreamDelegate()
+
+  /// The delegate actually in use; "CPU (fallback)" when GPU failed to init.
+  private(set) static var activeDelegate = "none"
+
+  /// Where the frame sits inside the inference square, in pixels.
+  private struct Geometry {
+    let uprightWidth: Int
+    let uprightHeight: Int
+    let contentWidth: Int
+    let contentHeight: Int
+    let padX: Int
+    let padY: Int
+  }
+
+  private struct Pending {
+    let token: Int
+    let timestampMs: Int
+    let reply: FlutterResult
+    let geometry: Geometry
+  }
+
+  private static let stateLock = NSLock()
+  private static var pending: Pending?
+  private static var nextToken = 0
+  private static var lastTimestampMs = 0
+
+  // Reused across frames. Touched only on `queue` while a detection is claimed,
+  // and read by MediaPipe only until the delegate fires.
+  private static var squareBuffer: CVPixelBuffer?
+  private static var scaledStorage: UnsafeMutableRawPointer?
+  private static var scaledCapacity = 0
 
   static func register(with registrar: FlutterPluginRegistrar) {
     let channel = FlutterMethodChannel(name: "forma/pose_landmarker", binaryMessenger: registrar.messenger())
@@ -53,25 +109,14 @@ enum MediaPipePoseChannel {
           return
         }
         queue.async {
-          do {
-            try ensureLandmarker()
-            let landmarks = try detectPose(
-              bytes: bytes.data,
-              width: width,
-              height: height,
-              bytesPerRow: bytesPerRow,
-              rotationDegrees: rotationDegrees
-            )
-            DispatchQueue.main.async { result(landmarks) }
-          } catch {
-            // A single bad frame should never surface as a crash — report
-            // "no pose" for this frame and let the next frame try again.
-            // Logged (not surfaced to Dart as an error) so a real, per-frame
-            // failure is still visible in the Xcode console instead of
-            // looking identical to "no body detected".
-            print("MediaPipePoseChannel: detect failed: \(error)")
-            DispatchQueue.main.async { result(nil) }
-          }
+          submit(
+            bytes: bytes.data,
+            width: width,
+            height: height,
+            bytesPerRow: bytesPerRow,
+            rotationDegrees: rotationDegrees,
+            reply: result
+          )
         }
       default:
         result(FlutterMethodNotImplemented)
@@ -79,98 +124,261 @@ enum MediaPipePoseChannel {
     }
   }
 
+  // MARK: - Landmarker lifecycle
+
   private static func ensureLandmarker() throws {
     if landmarker != nil { return }
     let key = FlutterDartProject.lookupKey(forAsset: "assets/models/pose_landmarker_full.task")
     guard let modelPath = Bundle.main.path(forResource: key, ofType: nil) else {
       throw PoseChannelError.modelNotFound
     }
+
+    if let built = tryBuild(modelPath: modelPath, delegate: .GPU) {
+      landmarker = built
+      activeDelegate = "GPU"
+    } else {
+      print("MediaPipePoseChannel: GPU delegate failed to initialise; falling back to CPU")
+      guard let built = tryBuild(modelPath: modelPath, delegate: .CPU) else {
+        activeDelegate = "none"
+        throw PoseChannelError.landmarkerUnavailable
+      }
+      landmarker = built
+      activeDelegate = "CPU (fallback)"
+    }
+    print("MediaPipePoseChannel: landmarker ready delegate=\(activeDelegate)")
+  }
+
+  private static func tryBuild(modelPath: String, delegate: Delegate) -> PoseLandmarker? {
     let options = PoseLandmarkerOptions()
     options.baseOptions.modelAssetPath = modelPath
-    options.baseOptions.delegate = .CPU
-    options.runningMode = .image
+    options.baseOptions.delegate = delegate
+    options.runningMode = .liveStream
     options.numPoses = 1
-    landmarker = try PoseLandmarker(options: options)
+    options.poseLandmarkerLiveStreamDelegate = liveStreamDelegate
+    do {
+      return try PoseLandmarker(options: options)
+    } catch {
+      print("MediaPipePoseChannel: landmarker build failed for \(delegate): \(error)")
+      return nil
+    }
   }
 
-  /// Builds a `CVPixelBuffer`/`MPImage` directly over [bytes]' backing
-  /// storage and runs detection *inside* the `withUnsafeBytes` closure —
-  /// `CVPixelBufferCreateWithBytes` (with no release callback) does not
-  /// copy the pixel data, so the pointer must stay valid for as long as
-  /// the pixel buffer is used, which is only guaranteed for the duration
-  /// of this closure.
-  private static func detectPose(bytes: Data, width: Int, height: Int, bytesPerRow: Int, rotationDegrees: Int) throws
-    -> [[String: Any]]?
-  {
-    guard let landmarker else { throw PoseChannelError.notInitialized }
+  // MARK: - One detection
 
-    return try bytes.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> [[String: Any]]? in
-      guard let baseAddress = raw.baseAddress else { throw PoseChannelError.imageBuildFailed }
+  private static func submit(
+    bytes: Data,
+    width: Int,
+    height: Int,
+    bytesPerRow: Int,
+    rotationDegrees: Int,
+    reply: @escaping FlutterResult
+  ) {
+    var token = -1
+    do {
+      try ensureLandmarker()
+      guard let landmarker else { throw PoseChannelError.landmarkerUnavailable }
 
-      var pixelBuffer: CVPixelBuffer?
-      let status = CVPixelBufferCreateWithBytes(
-        kCFAllocatorDefault,
-        width,
-        height,
-        kCVPixelFormatType_32BGRA,
-        UnsafeMutableRawPointer(mutating: baseAddress),
-        bytesPerRow,
-        nil,
-        nil,
-        nil,
-        &pixelBuffer
-      )
-      guard status == kCVReturnSuccess, let pixelBuffer else {
-        throw PoseChannelError.imageBuildFailed
+      let rotation = ((rotationDegrees % 360) + 360) % 360
+      let geometry = geometryFor(width: width, height: height, rotation: rotation)
+
+      stateLock.lock()
+      if pending != nil {
+        stateLock.unlock()
+        // Should be unreachable: Dart drops frames while busy. Refuse rather
+        // than overwrite the buffer MediaPipe is still reading.
+        DispatchQueue.main.async { reply(nil) }
+        return
       }
+      var timestamp = Int(ProcessInfo.processInfo.systemUptime * 1000)
+      if timestamp <= lastTimestampMs { timestamp = lastTimestampMs + 1 }  // must strictly increase
+      lastTimestampMs = timestamp
+      nextToken += 1
+      token = nextToken
+      pending = Pending(token: token, timestampMs: timestamp, reply: reply, geometry: geometry)
+      stateLock.unlock()
 
-      let mpImage = try MPImage(pixelBuffer: pixelBuffer, orientation: orientation(forDegrees: rotationDegrees))
-      let result = try landmarker.detect(image: mpImage)
-      guard let pose = result.landmarks.first else { return nil }
+      let claimed = token
+      DispatchQueue.main.asyncAfter(deadline: .now() + resultTimeout) { complete(token: claimed, payload: nil) }
 
-      // Unlike Android's Bitmap route, MediaPipe's iOS API returns
-      // landmarks relative to the *original, unrotated* pixel buffer even
-      // though `orientation` was supplied (confirmed against Google's own
-      // PoseOverlay.swift sample, which applies this exact per-orientation
-      // swap/flip before scaling — e.g. its `.left` case computes
-      // `(x: y, y: 1 - x)`, matching the 270° case below). So the
-      // normalized coordinates must be rotated into "upright" space here,
-      // then scaled by the upright (rotation-swapped) dimensions.
-      let normalizedRotation = ((rotationDegrees % 360) + 360) % 360
-      let outputWidth = (normalizedRotation == 90 || normalizedRotation == 270) ? height : width
-      let outputHeight = (normalizedRotation == 90 || normalizedRotation == 270) ? width : height
-
-      return pose.map { landmark in
-        let rawX = Double(landmark.x)
-        let rawY = Double(landmark.y)
-        let upright: (x: Double, y: Double)
-        switch normalizedRotation {
-        case 90: upright = (1 - rawY, rawX)
-        case 180: upright = (1 - rawX, 1 - rawY)
-        case 270: upright = (rawY, 1 - rawX)
-        default: upright = (rawX, rawY)
-        }
-
-        return [
-          "x": upright.x * Double(outputWidth),
-          "y": upright.y * Double(outputHeight),
-          "z": Double(landmark.z),
-          "visibility": landmark.visibility.map { Double(truncating: $0) } ?? 1.0,
-        ] as [String: Any]
+      let buffer = try convert(
+        bytes: bytes, width: width, height: height, bytesPerRow: bytesPerRow, rotation: rotation, geometry: geometry)
+      let image = try MPImage(pixelBuffer: buffer)
+      // Throws if the frame is refused; reaching the next line means MediaPipe
+      // now owns the buffer until the delegate fires.
+      try landmarker.detectAsync(image: image, timestampInMilliseconds: timestamp)
+    } catch {
+      // A single bad frame should never surface as a crash — report "no pose"
+      // for this frame and let the next frame try again. Logged (not surfaced
+      // to Dart as an error) so a real per-frame failure is still visible in
+      // the Xcode console instead of looking identical to "no body detected".
+      print("MediaPipePoseChannel: detect failed: \(error)")
+      if token >= 0 {
+        complete(token: token, payload: nil)
+      } else {
+        DispatchQueue.main.async { reply(nil) }
       }
     }
   }
 
-  /// MediaPipe's `MPImage` takes rotation as a `UIImage.Orientation`
-  /// rather than raw degrees — `.right` means "90° clockwise to upright",
-  /// matching the same rotation convention `pose_service.dart`'s
-  /// `_rotationFor` already computes.
-  private static func orientation(forDegrees degrees: Int) -> UIImage.Orientation {
-    switch ((degrees % 360) + 360) % 360 {
-    case 90: return .right
-    case 180: return .down
-    case 270: return .left
-    default: return .up
+  /// Delegate thread. Delivers the held reply.
+  fileprivate static func finish(result: PoseLandmarkerResult?, timestampMs: Int, error: Error?) {
+    stateLock.lock()
+    let claimed = pending
+    stateLock.unlock()
+    guard let claimed else { return }
+    // A late result for a frame we already gave up on must not be handed to the
+    // next frame, whose geometry may differ.
+    guard claimed.timestampMs == timestampMs else { return }
+
+    if let error {
+      print("MediaPipePoseChannel: inference error: \(error)")
+      complete(token: claimed.token, payload: nil)  // MUST release the reply, or Dart's _isBusy never clears
+      return
     }
+    guard let pose = result?.landmarks.first else {
+      complete(token: claimed.token, payload: nil)
+      return
+    }
+
+    let g = claimed.geometry
+    let payload: [[String: Any]] = pose.map { landmark in
+      // Landmarks are normalised to the whole square, letterbox padding
+      // included — undo the pad, then scale to the upright frame's pixels.
+      let ux = (Double(landmark.x) * Double(size) - Double(g.padX)) / Double(g.contentWidth)
+      let uy = (Double(landmark.y) * Double(size) - Double(g.padY)) / Double(g.contentHeight)
+      return [
+        "x": ux * Double(g.uprightWidth),
+        "y": uy * Double(g.uprightHeight),
+        "z": Double(landmark.z),
+        "visibility": landmark.visibility.map { Double(truncating: $0) } ?? 1.0,
+      ]
+    }
+    complete(token: claimed.token, payload: payload)
+  }
+
+  /// Idempotent: only the first completion for a token replies.
+  private static func complete(token: Int, payload: [[String: Any]]?) {
+    stateLock.lock()
+    guard let claimed = pending, claimed.token == token else {
+      stateLock.unlock()
+      return
+    }
+    pending = nil
+    stateLock.unlock()
+    DispatchQueue.main.async { claimed.reply(payload) }
+  }
+
+  // MARK: - Frame conversion
+
+  /// Largest upright rectangle with the frame's aspect ratio that fits the
+  /// square. Even dimensions only. Letterboxed rather than centre-cropped: a
+  /// crop on a portrait phone discards the head and feet of a standing person.
+  private static func geometryFor(width: Int, height: Int, rotation: Int) -> Geometry {
+    let quarterTurn = rotation == 90 || rotation == 270
+    let uprightW = quarterTurn ? height : width
+    let uprightH = quarterTurn ? width : height
+    let longEdge = max(uprightW, uprightH)
+    let contentW = even(size * uprightW / longEdge)
+    let contentH = even(size * uprightH / longEdge)
+    return Geometry(
+      uprightWidth: uprightW, uprightHeight: uprightH,
+      contentWidth: contentW, contentHeight: contentH,
+      padX: (size - contentW) / 2, padY: (size - contentH) / 2)
+  }
+
+  private static func even(_ n: Int) -> Int { max(2, n & ~1) }
+
+  /// BGRA frame -> upright, letterboxed 256x256 BGRA, with vImage.
+  ///
+  /// Scale first (in buffer orientation) so the rotate and pad run on a small
+  /// image rather than the full camera frame, then rotate straight into the
+  /// content sub-rect of the square. `rotation` is clockwise-to-upright, the
+  /// same convention `PoseCoachService._rotationFor` produces.
+  private static func convert(
+    bytes: Data, width: Int, height: Int, bytesPerRow: Int, rotation: Int, geometry g: Geometry
+  ) throws -> CVPixelBuffer {
+    guard bytes.count >= bytesPerRow * height, bytesPerRow >= width * 4 else {
+      throw PoseChannelError.conversionFailed("frame buffer smaller than \(bytesPerRow)x\(height)")
+    }
+    let square = try ensureSquareBuffer()
+
+    let quarterTurn = rotation == 90 || rotation == 270
+    let scaledW = quarterTurn ? g.contentHeight : g.contentWidth
+    let scaledH = quarterTurn ? g.contentWidth : g.contentHeight
+    let scaledBytes = scaledW * scaledH * 4
+    if scaledCapacity < scaledBytes {
+      scaledStorage?.deallocate()
+      scaledStorage = UnsafeMutableRawPointer.allocate(byteCount: scaledBytes, alignment: 16)
+      scaledCapacity = scaledBytes
+    }
+    guard let scaledBase = scaledStorage else { throw PoseChannelError.imageBuildFailed }
+
+    CVPixelBufferLockBaseAddress(square, [])
+    defer { CVPixelBufferUnlockBaseAddress(square, []) }
+    guard let squareBase = CVPixelBufferGetBaseAddress(square) else { throw PoseChannelError.imageBuildFailed }
+    let squareRowBytes = CVPixelBufferGetBytesPerRow(square)
+
+    try bytes.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+      guard let base = raw.baseAddress else { throw PoseChannelError.imageBuildFailed }
+
+      var src = vImage_Buffer(
+        data: UnsafeMutableRawPointer(mutating: base),
+        height: vImagePixelCount(height), width: vImagePixelCount(width), rowBytes: bytesPerRow)
+      var scaled = vImage_Buffer(
+        data: scaledBase,
+        height: vImagePixelCount(scaledH), width: vImagePixelCount(scaledW), rowBytes: scaledW * 4)
+      let scaleErr = vImageScale_ARGB8888(&src, &scaled, nil, vImage_Flags(kvImageHighQualityResampling))
+      guard scaleErr == kvImageNoError else { throw PoseChannelError.conversionFailed("scale \(scaleErr)") }
+
+      // Opaque black padding, rewritten every frame so a stale border never
+      // becomes a moving edge for the model to latch onto.
+      var whole = vImage_Buffer(
+        data: squareBase, height: vImagePixelCount(size), width: vImagePixelCount(size), rowBytes: squareRowBytes)
+      var black: [UInt8] = [0, 0, 0, 255]
+      let fillErr = vImageBufferFill_ARGB8888(&whole, &black, vImage_Flags(kvImageNoFlags))
+      guard fillErr == kvImageNoError else { throw PoseChannelError.conversionFailed("fill \(fillErr)") }
+
+      var dst = vImage_Buffer(
+        data: squareBase.advanced(by: g.padY * squareRowBytes + g.padX * 4),
+        height: vImagePixelCount(g.contentHeight), width: vImagePixelCount(g.contentWidth),
+        rowBytes: squareRowBytes)
+      let turn: UInt8
+      switch rotation {
+      case 90: turn = UInt8(kRotate90DegreesClockwise)
+      case 180: turn = UInt8(kRotate180DegreesClockwise)
+      case 270: turn = UInt8(kRotate270DegreesClockwise)
+      default: turn = UInt8(kRotate0DegreesClockwise)
+      }
+      let rotateErr = vImageRotate90_ARGB8888(&scaled, &dst, turn, &black, vImage_Flags(kvImageNoFlags))
+      guard rotateErr == kvImageNoError else { throw PoseChannelError.conversionFailed("rotate \(rotateErr)") }
+    }
+    return square
+  }
+
+  private static func ensureSquareBuffer() throws -> CVPixelBuffer {
+    if let squareBuffer { return squareBuffer }
+    // IOSurface-backed so MPImage can wrap it without a copy.
+    let attrs: [CFString: Any] = [
+      kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary,
+      kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA,
+    ]
+    var out: CVPixelBuffer?
+    let status = CVPixelBufferCreate(
+      kCFAllocatorDefault, size, size, kCVPixelFormatType_32BGRA, attrs as CFDictionary, &out)
+    guard status == kCVReturnSuccess, let buffer = out else { throw PoseChannelError.imageBuildFailed }
+    squareBuffer = buffer
+    return buffer
+  }
+}
+
+/// MediaPipe delivers live-stream results on its own private queue.
+private final class LiveStreamDelegate: NSObject, PoseLandmarkerLiveStreamDelegate {
+  func poseLandmarker(
+    _ poseLandmarker: PoseLandmarker,
+    didFinishDetection result: PoseLandmarkerResult?,
+    timestampInMilliseconds: Int,
+    error: Error?
+  ) {
+    MediaPipePoseChannel.finish(result: result, timestampMs: timestampInMilliseconds, error: error)
   }
 }

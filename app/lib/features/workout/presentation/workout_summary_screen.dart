@@ -99,8 +99,16 @@ class _WorkoutSummaryScreenState extends ConsumerState<WorkoutSummaryScreen> {
   @override
   Widget build(BuildContext context) {
     final sessionAsync = ref.watch(sessionProvider(widget.sessionId));
+    // Reached two different ways: `context.go` right after finishing a
+    // workout (no back stack — nothing to return to but Today) or
+    // `context.push` from workout history to review a past session (a real
+    // back stack exists). Without this, a history visit had no way back
+    // except an undiscoverable OS back-gesture, and DONE would `context.go`
+    // to Today, clobbering the stack it could otherwise have popped.
+    final canPop = Navigator.of(context).canPop();
 
     return Scaffold(
+      appBar: canPop ? AppBar(title: const Text('WORKOUT SUMMARY')) : null,
       body: sessionAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (error, stack) => SafeArea(
@@ -167,6 +175,9 @@ class _Body extends ConsumerWidget {
     final volume = _volumeKg(session);
     final avgForm = _avgForm(session);
     final prSets = session.sets.where((s) => s.isPr).toList();
+    // See the doc comment on `WorkoutSummaryScreen.build`'s own `canPop` —
+    // same reasoning, computed again here since this is a separate widget.
+    final canPop = Navigator.of(context).canPop();
 
     // A rough "vs your last similar workout" comparison, when one exists in
     // the already-fetched recent-sessions list — omitted entirely (StatTile
@@ -241,7 +252,10 @@ class _Body extends ConsumerWidget {
           const SizedBox(height: AppSpacing.xl),
           SizedBox(
             width: double.infinity,
-            child: FilledButton(onPressed: () => context.go(AppRoutes.today), child: const Text('DONE')),
+            child: FilledButton(
+              onPressed: () => canPop ? Navigator.of(context).pop() : context.go(AppRoutes.today),
+              child: const Text('DONE'),
+            ),
           ),
           const SizedBox(height: AppSpacing.sm),
           Center(

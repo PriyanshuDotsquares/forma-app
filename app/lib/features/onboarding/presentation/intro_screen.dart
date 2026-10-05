@@ -56,18 +56,6 @@ class _IntroScreenState extends State<IntroScreen> {
                   onPageChanged: (i) => setState(() => _page = i),
                   itemBuilder: (context, i) => _Hero(page: pages[i]),
                 ),
-                SafeArea(
-                  child: Align(
-                    alignment: Alignment.topRight,
-                    child: Padding(
-                      padding: const EdgeInsets.all(AppSpacing.sm),
-                      child: TextButton(
-                        onPressed: () => context.go(AppRoutes.auth),
-                        child: Text(l10n.skip),
-                      ),
-                    ),
-                  ),
-                ),
               ],
             ),
           ),
@@ -116,14 +104,14 @@ class _IntroScreenState extends State<IntroScreen> {
                     SizedBox(
                       width: double.infinity,
                       child: FilledButton(
-                        onPressed: () => context.go(AppRoutes.auth),
+                        onPressed: () => context.push(AppRoutes.auth),
                         child: Text(l10n.getStarted),
                       ),
                     ),
                     const SizedBox(height: AppSpacing.sm),
                     Center(
                       child: TextButton(
-                        onPressed: () => context.go(AppRoutes.auth),
+                        onPressed: () => context.push(AppRoutes.auth),
                         child: Text(l10n.alreadyHaveAccount),
                       ),
                     ),

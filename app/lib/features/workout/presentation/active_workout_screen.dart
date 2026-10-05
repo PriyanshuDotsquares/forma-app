@@ -11,6 +11,7 @@ import '../../../core/router/app_router.dart';
 import '../../auth/domain/user.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../../camera_coach/domain/form_heuristics.dart';
+import '../../camera_coach/domain/tempo_summary.dart';
 import '../../programs/domain/exercise.dart';
 import '../../programs/domain/program.dart';
 import '../../programs/presentation/programs_providers.dart';
@@ -72,6 +73,7 @@ class _SetEntry {
   int? goodRepsHint;
   int? badRepsHint;
   FlaggedJoint? flaggedJointHint;
+  TempoSummary? tempoHint;
 
   bool get isDone => logged != null;
 }
@@ -100,6 +102,7 @@ class _ActiveWorkoutScreenState extends ConsumerState<ActiveWorkoutScreen> {
   int _elapsedSeconds = 0;
   bool _paused = false;
   bool _finishing = false;
+  bool _loggingSet = false;
 
   bool _planBuilt = false;
   bool _isFreestyle = false;
@@ -322,6 +325,7 @@ class _ActiveWorkoutScreenState extends ConsumerState<ActiveWorkoutScreen> {
   }
 
   Future<void> _logCurrentSet() async {
+    if (_loggingSet) return;
     final rows = _sets[_currentExerciseIndex] ?? const [];
     final rowIndex = rows.indexWhere((s) => !s.isDone);
     if (rowIndex == -1) return;
@@ -329,6 +333,7 @@ class _ActiveWorkoutScreenState extends ConsumerState<ActiveWorkoutScreen> {
     final row = rows[rowIndex];
     final messenger = ScaffoldMessenger.of(context);
 
+    setState(() => _loggingSet = true);
     try {
       final loggedSet = await ref
           .read(workoutRepositoryProvider)
@@ -411,6 +416,7 @@ class _ActiveWorkoutScreenState extends ConsumerState<ActiveWorkoutScreen> {
         isLastSetOfWorkout: workoutComplete,
         goodReps: row.goodRepsHint,
         badReps: row.badRepsHint,
+        tempo: row.tempoHint,
       );
       if (!mounted) return;
 
@@ -433,6 +439,8 @@ class _ActiveWorkoutScreenState extends ConsumerState<ActiveWorkoutScreen> {
       }
     } on ApiException catch (e) {
       messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    } finally {
+      if (mounted) setState(() => _loggingSet = false);
     }
   }
 
@@ -472,6 +480,7 @@ class _ActiveWorkoutScreenState extends ConsumerState<ActiveWorkoutScreen> {
       rows[rowIndex].goodRepsHint = result.goodReps;
       rows[rowIndex].badRepsHint = result.badReps;
       rows[rowIndex].flaggedJointHint = result.dominantFlaggedJoint;
+      rows[rowIndex].tempoHint = result.tempo;
     });
   }
 
@@ -579,11 +588,15 @@ class _ActiveWorkoutScreenState extends ConsumerState<ActiveWorkoutScreen> {
     final pendingCoachSessionId = ref.watch(pendingCameraCoachProvider);
     if (pendingCoachSessionId == widget.sessionId && _plan.isNotEmpty && _currentExerciseIndex < _plan.length) {
       final user = ref.read(authControllerProvider).valueOrNull;
+      final rows = _sets[_currentExerciseIndex] ?? const <_SetEntry>[];
+      final firstUndoneRow = rows.indexWhere((s) => !s.isDone);
+      final targetReps = firstUndoneRow == -1 ? null : rows[firstUndoneRow].reps;
       return Scaffold(
         backgroundColor: AppColors.surfaceLowest,
         body: LiveTrackingOverlay(
           exercise: _plan[_currentExerciseIndex].exercise,
           voiceCoachSettings: user?.voiceCoach ?? const VoiceCoachSettings(),
+          targetReps: targetReps,
           onFinish: _handleLiveSetFinished,
           onCancel: _handleLiveTrackingCancel,
         ),
@@ -659,14 +672,14 @@ class _ActiveWorkoutScreenState extends ConsumerState<ActiveWorkoutScreen> {
                         const SizedBox(height: AppSpacing.sm),
                         TextButton.icon(
                           onPressed: _addSetToCurrentExercise,
-                          icon: const Icon(Icons.add, size: 16),
+                          icon: const Icon(Icons.add),
                           label: const Text('ADD SET'),
                         ),
                         if (_isFreestyle) ...[
                           const SizedBox(height: AppSpacing.sm),
                           TextButton.icon(
                             onPressed: _addFreestyleExercise,
-                            icon: const Icon(Icons.add_circle_outline, size: 16),
+                            icon: const Icon(Icons.add_circle_outline),
                             label: const Text('ADD EXERCISE'),
                           ),
                         ],
@@ -677,8 +690,9 @@ class _ActiveWorkoutScreenState extends ConsumerState<ActiveWorkoutScreen> {
               _BottomActionBar(
                 showCoachButton: currentPlan.supportsCoaching && canLog,
                 canLog: canLog,
+                loggingSet: _loggingSet,
                 onCoachSet: _openCameraPrecheck,
-                onLogSet: canLog ? _logCurrentSet : null,
+                onLogSet: (canLog && !_loggingSet) ? _logCurrentSet : null,
               ),
           ],
         ),
@@ -919,10 +933,17 @@ class _SetRow extends StatelessWidget {
 }
 
 class _BottomActionBar extends StatelessWidget {
-  const _BottomActionBar({required this.showCoachButton, required this.canLog, required this.onCoachSet, required this.onLogSet});
+  const _BottomActionBar({
+    required this.showCoachButton,
+    required this.canLog,
+    required this.loggingSet,
+    required this.onCoachSet,
+    required this.onLogSet,
+  });
 
   final bool showCoachButton;
   final bool canLog;
+  final bool loggingSet;
   final VoidCallback onCoachSet;
   final VoidCallback? onLogSet;
 
@@ -937,13 +958,21 @@ class _BottomActionBar extends StatelessWidget {
             Expanded(
               child: OutlinedButton.icon(
                 onPressed: onCoachSet,
-                icon: const Icon(Icons.videocam_outlined, size: 18),
+                icon: const Icon(Icons.videocam_outlined),
                 label: const Text('COACH SET'),
               ),
             ),
             const SizedBox(width: AppSpacing.sm),
           ],
-          Expanded(flex: 2, child: FilledButton(onPressed: onLogSet, child: const Text('LOG SET'))),
+          Expanded(
+            flex: 2,
+            child: FilledButton(
+              onPressed: onLogSet,
+              child: loggingSet
+                  ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Text('LOG SET'),
+            ),
+          ),
         ],
       ),
     );

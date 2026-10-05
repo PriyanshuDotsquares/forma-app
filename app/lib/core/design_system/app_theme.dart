@@ -80,22 +80,36 @@ class AppTheme {
           foregroundColor: AppColors.accentBlueDark,
           disabledBackgroundColor: AppColors.accentBlue.withValues(alpha: 0.35),
           disabledForegroundColor: AppColors.accentBlueDark.withValues(alpha: 0.6),
-          padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
+          // Horizontal padding matters here even though most buttons are
+          // full-width and it looks redundant on those: `AppRadius.button`
+          // is a fully-rounded pill (100), and a bare `vertical`-only value
+          // resolves to exactly 0 horizontal padding — fine for a plain
+          // text label, but it crams an icon+label combo (`.icon()`
+          // buttons) right up against the pill's curved caps with no
+          // breathing room. See `outlinedButtonTheme` below, which shares
+          // this and is where it's actually visible (e.g. "COACH SET").
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.md),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.button)),
           textStyle: AppTypography.body(size: 15, weight: FontWeight.w700),
+          iconSize: 18,
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
           foregroundColor: AppColors.textPrimary,
           side: const BorderSide(color: AppColors.outline),
-          padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.md),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.button)),
           textStyle: AppTypography.body(size: 15, weight: FontWeight.w700),
+          iconSize: 18,
         ),
       ),
       textButtonTheme: TextButtonThemeData(
-        style: TextButton.styleFrom(foregroundColor: AppColors.accentBlue, textStyle: AppTypography.body(weight: FontWeight.w600)),
+        style: TextButton.styleFrom(
+          foregroundColor: AppColors.accentBlue,
+          textStyle: AppTypography.body(weight: FontWeight.w600),
+          iconSize: 18,
+        ),
       ),
       iconTheme: const IconThemeData(color: AppColors.textSecondary),
       dividerTheme: const DividerThemeData(color: AppColors.outlineVariant, thickness: 1, space: 1),

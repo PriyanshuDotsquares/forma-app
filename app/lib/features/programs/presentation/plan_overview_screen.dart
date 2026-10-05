@@ -445,7 +445,7 @@ class _PlanContentState extends ConsumerState<_PlanContent> {
           width: double.infinity,
           child: OutlinedButton.icon(
             onPressed: _addingDay ? null : _addDay,
-            icon: const Icon(Icons.add, size: 18),
+            icon: const Icon(Icons.add),
             label: Text(_addingDay ? 'ADDING…' : 'ADD DAY'),
           ),
         ),
@@ -454,7 +454,7 @@ class _PlanContentState extends ConsumerState<_PlanContent> {
           width: double.infinity,
           child: OutlinedButton.icon(
             onPressed: () => context.go(AppRoutes.coach),
-            icon: const Icon(Icons.auto_awesome, size: 18),
+            icon: const Icon(Icons.auto_awesome),
             label: const Text('ASK AI TO ADJUST'),
           ),
         ),

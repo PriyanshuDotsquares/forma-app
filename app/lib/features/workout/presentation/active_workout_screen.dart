@@ -965,7 +965,7 @@ class _BottomActionBar extends StatelessWidget {
             const SizedBox(width: AppSpacing.sm),
           ],
           Expanded(
-            flex: 2,
+            flex: 1,
             child: FilledButton(
               onPressed: onLogSet,
               child: loggingSet

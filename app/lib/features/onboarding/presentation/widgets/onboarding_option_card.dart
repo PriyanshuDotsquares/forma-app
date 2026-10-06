@@ -52,7 +52,8 @@ class OnboardingOptionCard extends StatelessWidget {
               border: Border.all(color: borderColor, width: selected ? 1.5 : 1),
             ),
             child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              // Centered so the check/radio sits mid-card rather than at the top.
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 if (icon != null) ...[
                   Container(

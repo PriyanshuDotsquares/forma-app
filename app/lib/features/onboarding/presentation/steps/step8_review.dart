@@ -19,7 +19,7 @@ class Step8Review extends ConsumerWidget {
     if (age != null) parts.add('$age yrs');
     if (answers.heightCm != null) {
       parts.add(
-        answers.units == 'imperial' ? '${(answers.heightCm! / 2.54).round()} in' : '${answers.heightCm!.round()} cm',
+        answers.units == 'imperial' ? _feetAndInches(answers.heightCm!) : '${answers.heightCm!.round()} cm',
       );
     }
     if (answers.weightKg != null) {
@@ -142,4 +142,10 @@ class _ReviewRowTile extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 175 cm → 5 ft 9 in.
+String _feetAndInches(double cm) {
+  final totalInches = (cm / 2.54).round();
+  return '${totalInches ~/ 12} ft ${totalInches % 12} in';
 }

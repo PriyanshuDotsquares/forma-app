@@ -456,7 +456,7 @@ class _BottomBar extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           FilledButton(
-            onPressed: () => context.push(AppRoutes.onboardingSavePlan),
+            onPressed: () => context.push(AppRoutes.today),
             child: const Text('Looks good'),
           ),
           const SizedBox(height: AppSpacing.sm),

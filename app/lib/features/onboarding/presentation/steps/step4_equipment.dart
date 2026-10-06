@@ -149,7 +149,9 @@ class _EquipmentCard extends StatelessWidget {
 
     return Material(
       color: Colors.transparent,
-      child: InkWell(
+      child: SizedBox(
+        height:105,
+        child:InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(AppRadius.card),
         child: Stack(
@@ -164,6 +166,7 @@ class _EquipmentCard extends StatelessWidget {
                 border: Border.all(color: borderColor, width: selected ? 1.5 : 1),
               ),
               child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Icon(item.icon, size: 26, color: selected ? AppColors.accentBlue : AppColors.textSecondary),
                   const SizedBox(height: AppSpacing.sm),
@@ -199,6 +202,7 @@ class _EquipmentCard extends StatelessWidget {
           ],
         ),
       ),
+      )
     );
   }
 }

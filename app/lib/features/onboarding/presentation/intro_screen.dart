@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/design_system/design_system.dart';
 import '../../../core/router/app_router.dart';
+import '../../auth/presentation/auth_screen.dart';
 import '../../../l10n/generated/app_localizations.dart';
 
 class _IntroPage {
@@ -111,7 +112,7 @@ class _IntroScreenState extends State<IntroScreen> {
                     const SizedBox(height: AppSpacing.sm),
                     Center(
                       child: TextButton(
-                        onPressed: () => context.push(AppRoutes.auth),
+                        onPressed: () => context.push(AppRoutes.auth, extra: AuthScreen.signInExtra),
                         child: Text(l10n.alreadyHaveAccount),
                       ),
                     ),

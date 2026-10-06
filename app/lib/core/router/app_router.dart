@@ -152,7 +152,7 @@ final routerProvider = Provider<GoRouter>((ref) {
     routes: [
       GoRoute(path: AppRoutes.splash, builder: (context, state) => const SplashScreen()),
       GoRoute(path: AppRoutes.intro, builder: (context, state) => const IntroScreen()),
-      GoRoute(path: AppRoutes.auth, builder: (context, state) => const AuthScreen()),
+      GoRoute(path: AppRoutes.auth, builder: (context, state) => AuthScreen(startOnSignIn: state.extra == AuthScreen.signInExtra)),
       GoRoute(path: AppRoutes.forgotPassword, builder: (context, state) => const ForgotPasswordScreen()),
       GoRoute(
         path: AppRoutes.resetPassword,

@@ -87,7 +87,7 @@ class _ExperienceCard extends StatelessWidget {
             border: Border.all(color: borderColor, width: selected ? 1.5 : 1),
           ),
           child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               Expanded(
                 child: Column(

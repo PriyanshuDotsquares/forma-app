@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import '../../../../core/design_system/design_system.dart';
 import '../../../camera_coach/data/mediapipe/pose_types.dart';
@@ -12,6 +11,7 @@ import '../../../camera_coach/domain/rep_counter.dart';
 import '../../../camera_coach/domain/tempo_summary.dart';
 import '../../../programs/domain/exercise.dart';
 import 'pose_angle_mapper.dart';
+import 'camera_cover_preview.dart';
 
 /// What a live-coached set produced, handed back to the active-workout
 /// screen so it can prefill the normal (still-editable) reps/weight entry
@@ -250,7 +250,7 @@ class _LiveTrackingOverlayState extends State<LiveTrackingOverlay> {
       child: Stack(
         fit: StackFit.expand,
         children: [
-          CameraPreview(_poseService.controller),
+          CameraCoverPreview(_poseService.controller),
           SafeArea(
             child: Column(
               children: [

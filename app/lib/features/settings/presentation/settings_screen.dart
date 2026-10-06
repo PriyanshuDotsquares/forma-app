@@ -9,6 +9,7 @@ import '../../../core/router/app_router.dart';
 import '../../../l10n/generated/app_localizations.dart';
 import '../../auth/domain/user.dart';
 import '../../auth/presentation/auth_controller.dart';
+import '../../programs/presentation/active_program_controller.dart';
 import 'language_screen.dart';
 import 'widgets/settings_row.dart';
 
@@ -272,12 +273,49 @@ void _confirmDeleteAccount(BuildContext context) {
   );
 }
 
-Future<void> _showGoalsSheet(BuildContext context, WidgetRef ref, User user) {
-  return showModalBottomSheet(
+bool _sameSet(Set<String> a, Iterable<String> b) {
+  final other = b.toSet();
+  return a.length == other.length && a.containsAll(other);
+}
+
+/// Settings edits only change the saved profile — the plan the user is
+/// already following is a separate, generated thing (and may have been
+/// hand-edited), so it isn't touched until they say so. Regenerating reads
+/// the profile that was just saved.
+Future<void> _offerPlanUpdate(BuildContext context, WidgetRef ref) async {
+  final update = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('Update your plan?'),
+      content: const Text(
+        'Your training settings are saved. Your current plan is unchanged until you regenerate it. '
+        'Regenerating builds a new plan from these settings and replaces the current one, including any edits you made.',
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Not now')),
+        FilledButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Update plan')),
+      ],
+    ),
+  );
+  if (update != true) return;
+  // Read before the await below: the dialog's context is gone by then.
+  final messenger = ScaffoldMessenger.of(context);
+  final controller = ref.read(activeProgramControllerProvider.notifier);
+  messenger.showSnackBar(const SnackBar(content: Text('Updating your plan…')));
+  await controller.regenerate();
+  messenger.hideCurrentSnackBar();
+  if (!context.mounted) return; // left Settings while it was working
+  final failed = ref.read(activeProgramControllerProvider).hasError;
+  messenger.showSnackBar(SnackBar(content: Text(failed ? 'Could not update your plan. Try Regenerate on the Plan tab.' : 'Plan updated.')));
+}
+
+Future<void> _showGoalsSheet(BuildContext context, WidgetRef ref, User user) async {
+  final changed = await showModalBottomSheet<bool>(
     context: context,
     isScrollControlled: true,
     builder: (context) => _GoalsExperienceSheet(initialGoal: user.goal, initialExperience: user.experienceLevel),
   );
+  if (changed == true && context.mounted) await _offerPlanUpdate(context, ref);
 }
 
 class _GoalsExperienceSheet extends ConsumerStatefulWidget {
@@ -305,7 +343,7 @@ class _GoalsExperienceSheetState extends ConsumerState<_GoalsExperienceSheet> {
         if (_goal != null) 'goal': _goal,
         if (_experience != null) 'experience_level': _experience,
       });
-      if (mounted) Navigator.of(context).pop();
+      if (mounted) Navigator.of(context).pop(_goal != widget.initialGoal || _experience != widget.initialExperience);
     } catch (_) {
       if (mounted) {
         setState(() => _saving = false);
@@ -364,12 +402,13 @@ class _GoalsExperienceSheetState extends ConsumerState<_GoalsExperienceSheet> {
   }
 }
 
-Future<void> _showScheduleSheet(BuildContext context, WidgetRef ref, User user) {
-  return showModalBottomSheet(
+Future<void> _showScheduleSheet(BuildContext context, WidgetRef ref, User user) async {
+  final changed = await showModalBottomSheet<bool>(
     context: context,
     isScrollControlled: true,
     builder: (context) => _ScheduleSheet(initialDays: user.daysPerWeek, initialMinutes: user.sessionMinutes),
   );
+  if (changed == true && context.mounted) await _offerPlanUpdate(context, ref);
 }
 
 class _ScheduleSheet extends ConsumerStatefulWidget {
@@ -390,7 +429,7 @@ class _ScheduleSheetState extends ConsumerState<_ScheduleSheet> {
     setState(() => _saving = true);
     try {
       await ref.read(authControllerProvider.notifier).submitOnboarding({'days_per_week': _days, 'session_minutes': _minutes});
-      if (mounted) Navigator.of(context).pop();
+      if (mounted) Navigator.of(context).pop(_days != (widget.initialDays ?? 3) || _minutes != (widget.initialMinutes ?? 45));
     } catch (_) {
       if (mounted) {
         setState(() => _saving = false);
@@ -457,12 +496,13 @@ class _ScheduleSheetState extends ConsumerState<_ScheduleSheet> {
   }
 }
 
-Future<void> _showEquipmentSheet(BuildContext context, WidgetRef ref, User user) {
-  return showModalBottomSheet(
+Future<void> _showEquipmentSheet(BuildContext context, WidgetRef ref, User user) async {
+  final changed = await showModalBottomSheet<bool>(
     context: context,
     isScrollControlled: true,
     builder: (context) => _EquipmentSheet(initial: user.equipment),
   );
+  if (changed == true && context.mounted) await _offerPlanUpdate(context, ref);
 }
 
 class _EquipmentSheet extends ConsumerStatefulWidget {
@@ -481,7 +521,7 @@ class _EquipmentSheetState extends ConsumerState<_EquipmentSheet> {
     setState(() => _saving = true);
     try {
       await ref.read(authControllerProvider.notifier).submitOnboarding({'equipment': (_selected.toList()..sort())});
-      if (mounted) Navigator.of(context).pop();
+      if (mounted) Navigator.of(context).pop(!_sameSet(_selected, widget.initial));
     } catch (_) {
       if (mounted) {
         setState(() => _saving = false);
@@ -535,12 +575,13 @@ class _EquipmentSheetState extends ConsumerState<_EquipmentSheet> {
   }
 }
 
-Future<void> _showInjuriesSheet(BuildContext context, WidgetRef ref, User user) {
-  return showModalBottomSheet(
+Future<void> _showInjuriesSheet(BuildContext context, WidgetRef ref, User user) async {
+  final changed = await showModalBottomSheet<bool>(
     context: context,
     isScrollControlled: true,
     builder: (context) => _InjuriesSheet(initial: user.injuries),
   );
+  if (changed == true && context.mounted) await _offerPlanUpdate(context, ref);
 }
 
 class _InjuriesSheet extends ConsumerStatefulWidget {
@@ -563,7 +604,7 @@ class _InjuriesSheetState extends ConsumerState<_InjuriesSheet> {
     final injuries = [for (final part in _active) Injury(part: part, side: 'both', severity: 'moderate')];
     try {
       await ref.read(authControllerProvider.notifier).submitOnboarding({'injuries': injuries.map((i) => i.toJson()).toList()});
-      if (mounted) Navigator.of(context).pop();
+      if (mounted) Navigator.of(context).pop(!_sameSet(_active, [for (final i in widget.initial) i.part]));
     } catch (_) {
       if (mounted) {
         setState(() => _saving = false);

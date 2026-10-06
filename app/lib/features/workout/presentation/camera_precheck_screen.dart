@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
 
-import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -12,6 +11,7 @@ import '../../../core/router/app_router.dart';
 import '../../camera_coach/data/mediapipe/pose_types.dart';
 import '../../camera_coach/data/pose_service.dart';
 import 'workout_providers.dart';
+import 'widgets/camera_cover_preview.dart';
 
 /// Live-computed checklist status for the precheck screen, derived from the
 /// most recent detected pose against the current camera frame — not a
@@ -226,7 +226,7 @@ class _CameraPrecheckScreenState extends ConsumerState<CameraPrecheckScreen> {
       body: Stack(
         fit: StackFit.expand,
         children: [
-          CameraPreview(_poseService.controller),
+          CameraCoverPreview(_poseService.controller),
           const Positioned.fill(child: CustomPaint(painter: _SilhouetteGuidePainter())),
           SafeArea(
             child: Column(

@@ -11,7 +11,14 @@ import 'auth_controller.dart';
 enum _Mode { signUp, signIn }
 
 class AuthScreen extends ConsumerStatefulWidget {
-  const AuthScreen({super.key});
+  const AuthScreen({super.key, this.startOnSignIn = false});
+
+  /// Pass as the route `extra` (`context.push(AppRoutes.auth, extra: ...)`) to
+  /// open on the Sign in tab. An `extra` rather than a query parameter, since
+  /// the router's redirect matches `/auth` exactly.
+  static const signInExtra = 'sign-in';
+
+  final bool startOnSignIn;
 
   @override
   ConsumerState<AuthScreen> createState() => _AuthScreenState();
@@ -21,7 +28,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   final _formKey = GlobalKey<FormState>();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
-  _Mode _mode = _Mode.signUp;
+  late _Mode _mode = widget.startOnSignIn ? _Mode.signIn : _Mode.signUp;
   bool _obscure = true;
   String? _error;
 

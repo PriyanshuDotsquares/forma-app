@@ -244,6 +244,8 @@ class _DayEditorContentState extends ConsumerState<_DayEditorContent> {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      // Keeps this tall sheet from running up under the status bar/notch.
+      useSafeArea: true,
       builder: (_) => _EditExerciseSheet(exercise: exercise),
     );
   }
@@ -627,11 +629,15 @@ class _EditExerciseSheetState extends ConsumerState<_EditExerciseSheet> {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
+    // `useSafeArea` covers the top; this covers the bottom so SAVE / REMOVE
+    // stay clear of the home indicator (and sit above the keyboard when open).
+    return SafeArea(
+      top: false,
+      child: Padding(
       padding: EdgeInsets.only(
         left: AppSpacing.lg,
         right: AppSpacing.lg,
-        top: AppSpacing.lg,
+        top: AppSpacing.sm,
         bottom: MediaQuery.of(context).viewInsets.bottom + AppSpacing.lg,
       ),
       child: SingleChildScrollView(
@@ -639,7 +645,19 @@ class _EditExerciseSheetState extends ConsumerState<_EditExerciseSheet> {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(widget.exercise.exercise.name, style: AppTypography.display(size: 20)),
+            Row(
+              children: [
+                IconButton(
+                  tooltip: 'Back',
+                  icon: const Icon(Icons.arrow_back),
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+                const SizedBox(width: AppSpacing.xs),
+                Expanded(
+                  child: Text(widget.exercise.exercise.name, style: AppTypography.display(size: 20), maxLines: 2, overflow: TextOverflow.ellipsis),
+                ),
+              ],
+            ),
             const SizedBox(height: 4),
             Text(widget.exercise.exercise.muscleSummary, style: AppTypography.body(size: 13, color: AppColors.textSecondary)),
             const SizedBox(height: AppSpacing.lg),
@@ -742,6 +760,7 @@ class _EditExerciseSheetState extends ConsumerState<_EditExerciseSheet> {
             ),
           ],
         ),
+      ),
       ),
     );
   }

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/design_system/design_system.dart';
@@ -17,7 +18,11 @@ class Step3Numbers extends ConsumerStatefulWidget {
 }
 
 class _Step3NumbersState extends ConsumerState<Step3Numbers> {
+  // Metric height is one field in cm; imperial is feet + inches, the way
+  // people actually state it (5 ft 9 in), not a bare count of inches.
   late final TextEditingController _heightController;
+  late final TextEditingController _feetController;
+  late final TextEditingController _inchesController;
   late final TextEditingController _weightController;
   DateTime? _dob;
   String? _gender;
@@ -30,21 +35,29 @@ class _Step3NumbersState extends ConsumerState<Step3Numbers> {
     _dob = answers.dob;
     _gender = answers.gender;
     _units = answers.units;
-    _heightController = TextEditingController(text: _formatHeight(answers.heightCm, _units));
+    _heightController = TextEditingController(text: _units == 'imperial' ? '' : _formatHeight(answers.heightCm));
+    final (feet, inches) = _feetAndInches(answers.heightCm);
+    _feetController = TextEditingController(text: _units == 'imperial' ? feet : '');
+    _inchesController = TextEditingController(text: _units == 'imperial' ? inches : '');
     _weightController = TextEditingController(text: _formatWeight(answers.weightKg, _units));
   }
 
   @override
   void dispose() {
     _heightController.dispose();
+    _feetController.dispose();
+    _inchesController.dispose();
     _weightController.dispose();
     super.dispose();
   }
 
-  String _formatHeight(double? cm, String units) {
-    if (cm == null) return '';
-    final value = units == 'imperial' ? cm / 2.54 : cm;
-    return value.toStringAsFixed(0);
+  String _formatHeight(double? cm) => cm == null ? '' : cm.toStringAsFixed(0);
+
+  /// [cm] as whole feet and the remaining whole inches ("5", "9").
+  (String, String) _feetAndInches(double? cm) {
+    if (cm == null) return ('', '');
+    final totalInches = (cm / 2.54).round();
+    return ('${totalInches ~/ 12}', '${totalInches % 12}');
   }
 
   String _formatWeight(double? kg, String units) {
@@ -59,15 +72,22 @@ class _Step3NumbersState extends ConsumerState<Step3Numbers> {
       final heightCm = _parsedHeightCm();
       final weightKg = _parsedWeightKg();
       _units = units;
-      _heightController.text = _formatHeight(heightCm, units);
+      _heightController.text = units == 'imperial' ? '' : _formatHeight(heightCm);
+      final (feet, inches) = _feetAndInches(heightCm);
+      _feetController.text = units == 'imperial' ? feet : '';
+      _inchesController.text = units == 'imperial' ? inches : '';
       _weightController.text = _formatWeight(weightKg, units);
     });
   }
 
   double? _parsedHeightCm() {
-    final raw = double.tryParse(_heightController.text.trim());
-    if (raw == null) return null;
-    return _units == 'imperial' ? raw * 2.54 : raw;
+    if (_units == 'imperial') {
+      final feet = double.tryParse(_feetController.text.trim());
+      final inches = double.tryParse(_inchesController.text.trim());
+      if (feet == null && inches == null) return null;
+      return ((feet ?? 0) * 12 + (inches ?? 0)) * 2.54;
+    }
+    return double.tryParse(_heightController.text.trim());
   }
 
   double? _parsedWeightKg() {
@@ -145,11 +165,34 @@ class _Step3NumbersState extends ConsumerState<Step3Numbers> {
           const SizedBox(height: AppSpacing.lg),
           const SectionLabel('HEIGHT'),
           const SizedBox(height: AppSpacing.sm),
-          TextField(
-            controller: _heightController,
-            keyboardType: const TextInputType.numberWithOptions(decimal: false),
-            decoration: InputDecoration(hintText: '0', suffixText: _units == 'imperial' ? 'in' : 'cm'),
-          ),
+          if (_units == 'imperial')
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _feetController,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(1)],
+                    decoration: const InputDecoration(hintText: '0', suffixText: 'ft'),
+                  ),
+                ),
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(
+                  child: TextField(
+                    controller: _inchesController,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(2)],
+                    decoration: const InputDecoration(hintText: '0', suffixText: 'in'),
+                  ),
+                ),
+              ],
+            )
+          else
+            TextField(
+              controller: _heightController,
+              keyboardType: const TextInputType.numberWithOptions(decimal: false),
+              decoration: const InputDecoration(hintText: '0', suffixText: 'cm'),
+            ),
           const SizedBox(height: AppSpacing.lg),
           const SectionLabel('WEIGHT'),
           const SizedBox(height: AppSpacing.sm),

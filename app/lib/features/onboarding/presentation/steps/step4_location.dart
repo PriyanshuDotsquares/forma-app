@@ -137,11 +137,16 @@ class _LocationCard extends StatelessWidget {
                   const SizedBox(height: AppSpacing.sm),
                   Text(option.title, style: AppTypography.body(size: 15, weight: FontWeight.w700)),
                   const SizedBox(height: 2),
-                  Text(
-                    option.subtitle,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: AppTypography.body(size: 12, color: AppColors.textSecondary),
+                  // Always two lines tall so every card is the same size,
+                  // whether its subtitle wraps or not.
+                  ConstrainedBox(
+                    constraints: BoxConstraints(minHeight: MediaQuery.textScalerOf(context).scale(12 * 1.5 * 2)),
+                    child: Text(
+                      option.subtitle,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTypography.body(size: 12, color: AppColors.textSecondary),
+                    ),
                   ),
                   const SizedBox(height: AppSpacing.sm),
                   Container(

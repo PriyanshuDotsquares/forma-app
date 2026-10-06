@@ -31,8 +31,90 @@ class SplashScreen extends ConsumerWidget {
                   bordered: false,
                 ),
               )
-            : const FormaWordmark(size: 40),
+            : const _AnimatedWordmark(),
       ),
+    );
+  }
+}
+
+/// The letters of FORMA rise and fade in one after another, then a thin bar
+/// fills underneath for the rest of the splash so the wait reads as progress
+/// rather than a frozen screen.
+class _AnimatedWordmark extends StatefulWidget {
+  const _AnimatedWordmark();
+
+  @override
+  State<_AnimatedWordmark> createState() => _AnimatedWordmarkState();
+}
+
+class _AnimatedWordmarkState extends State<_AnimatedWordmark> with SingleTickerProviderStateMixin {
+  static const _letters = ['F', 'O', 'R', 'M', 'A'];
+
+  late final AnimationController _letterController = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1200),
+  )..forward();
+
+  @override
+  void dispose() {
+    _letterController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final style = AppTypography.wordmark(size: 40, color: AppColors.textPrimary);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Semantics(
+          label: 'FORMA',
+          child: ExcludeSemantics(
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (var i = 0; i < _letters.length; i++)
+                  AnimatedBuilder(
+                    animation: _letterController,
+                    builder: (context, child) {
+                      // Each letter owns a window of the timeline, overlapping
+                      // its neighbours so the motion flows rather than steps.
+                      final start = i * 0.12;
+                      final t = Curves.easeOutCubic.transform(
+                        ((_letterController.value - start) / 0.52).clamp(0.0, 1.0),
+                      );
+                      return Opacity(
+                        opacity: t,
+                        child: Transform.translate(offset: Offset(0, 16 * (1 - t)), child: child),
+                      );
+                    },
+                    child: Text(_letters[i], style: style),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: AppSpacing.lg),
+        // Fills over the minimum splash time, then holds full if the session
+        // check is still running.
+        TweenAnimationBuilder<double>(
+          tween: Tween(begin: 0, end: 1),
+          duration: AuthController.minSplashDuration,
+          curve: Curves.easeInOut,
+          builder: (context, value, _) => ClipRRect(
+            borderRadius: BorderRadius.circular(2),
+            child: SizedBox(
+              width: 96,
+              child: LinearProgressIndicator(
+                value: value,
+                minHeight: 3,
+                backgroundColor: AppColors.surfaceHighest,
+                color: AppColors.accentBlue,
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

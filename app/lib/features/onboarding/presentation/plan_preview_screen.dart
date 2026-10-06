@@ -471,7 +471,7 @@ class _BottomBar extends StatelessWidget {
       ),
     );
   }
-}
+} 
 
 String _headlineForGoal(String? goal) {
   switch (goal) {
